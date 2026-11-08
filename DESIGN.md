@@ -1,0 +1,3 @@
+# Design direction
+
+Sightline is a focused visual research library with an orange identity. Use the supplied symbol and wordmark, with brand orange #F26628 and a light wordmark for the dark interface. A neutral graphite navigation rail matches the inspector and frames near-black collection surfaces; orange marks primary actions and selection. Compact filters, flexible image views, and a contextual inspector keep saved references central. The canvas and font library remain distinct workspaces. Sidebar footer controls stay short and actionable; never expose a filesystem path as navigation copy.

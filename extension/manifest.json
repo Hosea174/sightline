@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Sightline Capture",
+  "version": "0.1.0",
+  "description": "Capture a website for your Sightline library.",
+  "permissions": [
+    "activeTab",
+    "tabCapture",
+    "storage",
+    "offscreen",
+    "unlimitedStorage",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "capture-visible": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Capture visible tab"
+    },
+    "record-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+V"
+      },
+      "description": "Start or stop tab recording"
+    },
+    "capture-area": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Capture part of the visible tab"
+    }
+  },
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

@@ -1,0 +1,2 @@
+# Sightline
+A personal, local-first visual research library for a designer studying websites, motion and illustration. Capture is frequent and must take seconds; each source groups assets, links, tags and observations. A visual grid and connected canvas share one library. Fonts are separate but can link to sources. The user wants a portable folder backed up by Google Drive, compressed media, Chrome capture and a Tauri desktop app. Similarity search is deferred. Assumptions: single user, Windows first, dark image-led workspace.

@@ -1,0 +1,9 @@
+import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';import {webcrypto} from 'node:crypto';
+let listener;const messages=[],tabs=[];const handlers={message:[],disconnect:[]};const event=name=>({addListener:f=>handlers[name].push(f),removeListener:f=>{handlers[name]=handlers[name].filter(x=>x!==f)}});
+const port={onMessage:event('message'),onDisconnect:event('disconnect'),postMessage(msg){messages.push(msg);queueMicrotask(()=>handlers.message.forEach(f=>f({ok:true})))},disconnect(){}};
+const chrome={scripting:{executeScript:async()=>[{result:{fonts:[{name:'Inter',files:['https://example.com/inter.woff2']}],external:[]}}]},tabs:{query:async()=>[{id:7,windowId:1,title:'Example',url:'https://example.com/page'}],captureVisibleTab:async()=>'data:image/png;base64,YQ==',create:async x=>tabs.push(x)},storage:{local:{set:async()=>{}}},commands:{onCommand:{addListener:()=>{}}},runtime:{onMessage:{addListener:fn=>listener=fn},connectNative:name=>{assert.equal(name,'com.sightline.capture');return port},getURL:s=>s}};
+vm.runInNewContext(fs.readFileSync(new URL('./extension/background.js',import.meta.url),'utf8'),{chrome,crypto:webcrypto,fetch:async()=>new Response(new Blob(['abc'])),console,Error,Promise,Uint8Array,Array,queueMicrotask,URL,setTimeout,clearTimeout});
+const call=msg=>new Promise(resolve=>listener(msg,null,resolve));
+assert.equal((await call({type:'save-clip',data:'blob:test',title:'Example',url:'https://example.com',tags:['motion'],category:'Web design',segments:[{start:1,end:2}]})).ok,true);assert.equal(messages[0].type,'begin');assert.deepEqual(messages[0].tags,['motion']);assert.deepEqual(messages[0].segments,[{start:1,end:2}]);assert.deepEqual(messages[1].data,[97,98,99]);assert.equal(messages[2].type,'end');
+assert.equal((await call({type:'screenshot'})).ok,true);assert.equal(tabs[0].url,'crop.html');
+console.log('Native capture handoff and screenshot review passed.');
