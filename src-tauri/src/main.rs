@@ -16,6 +16,27 @@ fn library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(PathBuf::from(path))
 }
 #[tauri::command]
+async fn fetch_favicon(app: tauri::AppHandle, source_id: String, source_url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        uuid::Uuid::parse_str(&source_id).map_err(|_| "Invalid source ID")?;
+        let url = url::Url::parse(&source_url).map_err(|_| "Invalid source URL")?;
+        if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() { return Err("Unsupported URL".to_string()); }
+        let icon_url = url.join("/favicon.ico").map_err(|e| e.to_string())?;
+        let dir = library_path(&app)?.join("favicons"); fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let temp = dir.join(format!("{}.part", uuid::Uuid::new_v4()));
+        let mut cmd = Command::new("curl.exe");
+        #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
+        let output = cmd.args(["--fail", "--silent", "--show-error", "--location", "--max-time", "12", "--max-filesize", "1048576", "--proto", "=http,https", "--proto-redir", "=http,https", "--output"]).arg(&temp).arg(icon_url.as_str()).output();
+        let result = (|| {
+            if !output.map_err(|e| e.to_string())?.status.success() { return Err("Favicon unavailable".to_string()); }
+            let bytes = fs::read(&temp).map_err(|e| e.to_string())?;
+            if bytes.len()>1048576 { return Err("Favicon too large".to_string()); }
+            let ext=if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {"png"} else if bytes.starts_with(b"\0\0\x01\0") {"ico"} else if bytes.starts_with(b"\xff\xd8\xff") {"jpg"} else if bytes.starts_with(b"GIF8") {"gif"} else if bytes.starts_with(b"RIFF") && bytes.get(8..12)==Some(b"WEBP") {"webp"} else {return Err("Unsupported favicon".to_string())};
+            let name=format!("{}.{ext}", uuid::Uuid::new_v4()); fs::rename(&temp,dir.join(&name)).map_err(|e|e.to_string())?; Ok(name)
+        })(); let _=fs::remove_file(temp); result
+    }).await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
 fn get_library(app: tauri::AppHandle) -> Result<String, String> {
     Ok(library_path(&app)?.to_string_lossy().to_string())
 }
@@ -398,7 +419,7 @@ fn inbox(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 fn valid_capture(c: &Capture) -> bool {
     let extensions = match c.kind.as_str() {
-        "image" => &["png"][..],
+        "image" => &["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "avif", "ico"][..],
         "video" => &["webm", "mp4"][..],
         "font" => &["woff", "woff2", "ttf", "otf"][..],
         _ => return false,
@@ -479,6 +500,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_library,
+            fetch_favicon,
             set_library,
             load_library,
             save_library,
@@ -505,6 +527,13 @@ mod capture_tests {
         c.file = format!("../{id}.mp4");
         assert!(!valid_capture(&c));
         c.file = format!("{id}.exe");
+        assert!(!valid_capture(&c));
+        c.kind = "image".into();
+        for ext in ["jpg", "webp", "gif", "svg", "avif"] {
+            c.file = format!("{id}.{ext}");
+            assert!(valid_capture(&c));
+        }
+        c.file = format!("../{id}.gif");
         assert!(!valid_capture(&c));
     }
 }

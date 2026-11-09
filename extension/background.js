@@ -1,6 +1,6 @@
 async function saveCapture(url, extension, title, sourceUrl, name, tags=[], category="Web design", segments) {
-  const response=await fetch(url);if(!response.ok)throw Error('Could not read the capture.');
-  const blob=await response.blob(),port=chrome.runtime.connectNative('com.sightline.capture');
+  let blob=url;if(typeof url==='string'){const response=await fetch(url);if(!response.ok)throw Error('Could not read the capture.');blob=await response.blob()}
+  const port=chrome.runtime.connectNative('com.sightline.capture');
   let failure=null;port.onDisconnect.addListener(()=>{failure=chrome.runtime.lastError?.message||'Sightline bridge disconnected.'});
   const send=message=>new Promise((resolve,reject)=>{
     if(failure){reject(Error(failure));return}
@@ -16,6 +16,24 @@ async function saveCapture(url, extension, title, sourceUrl, name, tags=[], cate
     await send({type:'end'});
   }finally{port.disconnect()}
 }
+const imageTypes={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/svg+xml':'svg','image/bmp':'bmp','image/avif':'avif','image/x-icon':'ico','image/vnd.microsoft.icon':'ico'};
+async function notifyImageResult(tabId,message,failed=false){
+ await chrome.action.setBadgeBackgroundColor({color:failed?'#b44940':'#f26628'}).catch(()=>{});await chrome.action.setBadgeText({text:failed?'!':'OK'}).catch(()=>{});await chrome.action.setTitle({title:`Sightline: ${message}`}).catch(()=>{});
+ if(tabId)await chrome.scripting.executeScript({target:{tabId},func:(message,failed)=>{const el=document.createElement('div');el.textContent=`Sightline: ${message}`;el.style.cssText=`all:initial;position:fixed;z-index:2147483647;right:20px;top:20px;max-width:360px;padding:14px 18px;border-radius:8px;background:${failed?'#562d2b':'#29292c'};color:#fff;font:13px system-ui;box-shadow:0 8px 30px #0009`;document.documentElement.append(el);setTimeout(()=>el.remove(),5000)},args:[message,failed]}).catch(()=>{});
+ setTimeout(()=>{chrome.action.setBadgeText({text:''}).catch(()=>{});chrome.action.setTitle({title:'Sightline Capture'}).catch(()=>{})},6000);
+}
+async function saveContextImage(info,tab){
+ if(!info.srcUrl)throw Error('This image has no accessible source.');
+ let imageUrl=info.srcUrl;
+ if(imageUrl.startsWith('blob:')){if(!tab?.id)throw Error('Cannot access this image.');const result=await chrome.scripting.executeScript({target:{tabId:tab.id,frameIds:[info.frameId||0]},func:async url=>{const response=await fetch(url);if(!response.ok)throw Error('Could not read image');const blob=await response.blob();if(blob.size>134217728)throw Error('Image is too large');return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)})},args:[imageUrl]});imageUrl=result[0]?.result;if(!imageUrl)throw Error('Could not read this image.');}
+ const response=await fetch(imageUrl);if(!response.ok)throw Error('Could not download this image.');const blob=await response.blob();if(!blob.size||blob.size>134217728)throw Error('Image is empty or too large.');
+ const type=(blob.type||'').split(';')[0].toLowerCase();let extension=imageTypes[type];if(!extension){try{const ext=new URL(info.srcUrl).pathname.split('.').pop().toLowerCase();if(['png','jpg','jpeg','webp','gif','svg','bmp','avif','ico'].includes(ext)&&(!type||type==='application/octet-stream'))extension=ext}catch{}}
+ if(!extension)throw Error('This image format is not supported.');
+ const pageUrl=info.pageUrl||tab?.url||'';const result=await chrome.runtime.sendNativeMessage('com.sightline.capture',{type:'tags',url:pageUrl});if(result?.error)throw Error(result.error);
+ let name='Saved image';try{const filename=decodeURIComponent(new URL(info.srcUrl).pathname.split('/').pop()||'');if(filename)name=filename.slice(0,180)}catch{}
+ await saveCapture(blob,extension,tab?.title||'Saved image',pageUrl,name,result?.source?.tags||[],result?.source?.category||'Web design')
+}
+if(chrome.contextMenus){chrome.runtime.onInstalled.addListener(()=>{chrome.contextMenus.create({id:'sightline-save-image',title:'Save image to Sightline',contexts:['image']})});chrome.contextMenus.onClicked.addListener((info,tab)=>{if(info.menuItemId!=='sightline-save-image')return;void saveContextImage(info,tab).then(()=>notifyImageResult(tab?.id,'Image saved to your Sightline inbox.')).catch(error=>notifyImageResult(tab?.id,error.message||String(error),true))})}
 const capture = async () => {
   const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];
   if(!tab?.id)throw Error('No active tab');
@@ -24,27 +42,28 @@ const capture = async () => {
   await chrome.tabs.create({url:chrome.runtime.getURL('crop.html')});
 };
 
-async function captureFullPage(){
- const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)throw Error('No active tab');
+async function captureFullPage(tabOverride=null,region=null){
+ const tab=tabOverride||(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)throw Error('No active tab');
  const execute=async(func,args=[])=>{const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func,args});return result[0].result};
  const info=await execute(()=>({x:scrollX,y:scrollY,width:innerWidth,height:innerHeight,total:Math.max(document.documentElement.scrollHeight,document.body?.scrollHeight||0)}));
- if(info.total>16000||info.width>8000)throw Error('This page is too large to capture as one image. Use an area capture instead.');
- let canvas,ctx,scale=1,lastBottom=0;
+ const box=region||{left:info.x,top:0,width:info.width,height:info.total};
+ if(box.width<2||box.height<2||box.width>info.width||box.left<info.x||box.left+box.width>info.x+info.width+1||box.height>16000||box.width>8000)throw Error('The selected area is too large or extends beyond the visible page width.');
+ const endY=Math.min(info.total,box.top+box.height);let canvas,ctx,scale=1,lastBottom=box.top;
  try{
   await execute(()=>{window.__sightlineCaptureStyle=document.createElement('style');window.__sightlineCaptureStyle.textContent='html{scroll-behavior:auto!important}';document.documentElement.append(window.__sightlineCaptureStyle)});
-  for(let requested=0;requested<info.total;requested+=info.height){
+  for(let requested=box.top;requested<endY;requested+=info.height){
    const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];if(active?.id!==tab.id)throw Error('Capture stopped because the active tab changed.');
-   const y=await execute(y=>{scrollTo(0,y);return scrollY},[requested]);
+   const y=await execute((y,x)=>{scrollTo(x,y);return scrollY},[requested,info.x]);
    await new Promise(resolve=>setTimeout(resolve,650));
    const stillActive=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];if(stillActive?.id!==tab.id)throw Error('Capture stopped because the active tab changed.');
    const data=await chrome.tabs.captureVisibleTab(tab.windowId,{format:'png'});const bitmap=await createImageBitmap(await (await fetch(data)).blob());
-   if(!canvas){scale=bitmap.width/info.width;if(Math.ceil(info.total*scale)>32000||bitmap.width*Math.ceil(info.total*scale)>120000000)throw Error('This page is too large to capture at the current screen resolution.');canvas=new OffscreenCanvas(bitmap.width,Math.ceil(info.total*scale));ctx=canvas.getContext('2d')}
-   const start=Math.max(lastBottom,y),bottom=Math.min(info.total,y+info.height);if(bottom>start){const sy=Math.round((start-y)*scale),dy=Math.round(start*scale),h=Math.min(bitmap.height-sy,Math.round((bottom-start)*scale));ctx.drawImage(bitmap,0,sy,bitmap.width,h,0,dy,bitmap.width,h);lastBottom=bottom}bitmap.close();
-   if(requested===0 && info.total>info.height)await execute(()=>{window.__sightlineHidden=[...document.querySelectorAll('body *')].filter(el=>{const pos=getComputedStyle(el).position;const r=el.getBoundingClientRect();return (pos==='fixed'||pos==='sticky')&&r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0}).map(el=>{const value=el.style.getPropertyValue('visibility'),priority=el.style.getPropertyPriority('visibility');el.style.setProperty('visibility','hidden','important');return {el,value,priority}})});
-   if(lastBottom>=info.total)break;
-   if(y===0&&requested>0)throw Error('This page cannot be scrolled for capture.');
+   if(!canvas){scale=bitmap.width/info.width;const w=Math.round(box.width*scale),h=Math.ceil(box.height*scale);if(h>32000||w*h>120000000)throw Error('This selection is too large to capture at the current screen resolution.');canvas=new OffscreenCanvas(w,h);ctx=canvas.getContext('2d')}
+   const start=Math.max(lastBottom,y),bottom=Math.min(endY,y+info.height);if(bottom>start){const sx=Math.round((box.left-info.x)*scale),sy=Math.round((start-y)*scale),dy=Math.round((start-box.top)*scale),h=Math.min(bitmap.height-sy,Math.round((bottom-start)*scale));ctx.drawImage(bitmap,sx,sy,canvas.width,h,0,dy,canvas.width,h);lastBottom=bottom}bitmap.close();
+   if(requested===box.top && box.height>info.height)await execute(()=>{window.__sightlineHidden=[...document.querySelectorAll('body *')].filter(el=>{const pos=getComputedStyle(el).position;const r=el.getBoundingClientRect();return (pos==='fixed'||pos==='sticky')&&r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0}).map(el=>{const value=el.style.getPropertyValue('visibility'),priority=el.style.getPropertyPriority('visibility');el.style.setProperty('visibility','hidden','important');return {el,value,priority}})});
+   if(lastBottom>=endY)break;
+   if(y===0&&requested>box.top)throw Error('This page cannot be scrolled for capture.');
   }
-  if(lastBottom<info.total-2)throw Error('The page changed during capture. Please try again.');
+  if(lastBottom<endY-2)throw Error('The page changed during capture. Please try again.');
   const blob=await canvas.convertToBlob({type:'image/png'});const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)});
   await chrome.storage.local.set({cropImage:data,cropTitle:tab.title||'',cropUrl:tab.url||'',cropFull:true});
  }finally{await execute((x,y)=>{(window.__sightlineHidden||[]).forEach(({el,value,priority})=>value?el.style.setProperty('visibility',value,priority):el.style.removeProperty('visibility'));delete window.__sightlineHidden;window.__sightlineCaptureStyle?.remove();delete window.__sightlineCaptureStyle;scrollTo(x,y)},[info.x,info.y]).catch(()=>{})}
@@ -92,11 +111,24 @@ async function inspectFonts() {
   return {fonts,title:tab.title||'',url:tab.url||''};
 }
 async function captureArea() {
-  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];
-  if (!tab?.id) throw new Error('No active tab');
-  const image=await chrome.tabs.captureVisibleTab(tab.windowId,{format:'png'});
-  await chrome.storage.local.set({cropImage:image,cropTitle:tab.title||'',cropUrl:tab.url||'',cropFull:false});
-  await chrome.tabs.create({url:chrome.runtime.getURL('crop.html')});
+ const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)throw Error('No active tab');
+ const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>new Promise(resolve=>{
+  if(document.getElementById('__sightline_selector')){resolve(null);return}
+  const host=document.createElement('div');host.id='__sightline_selector';host.style.cssText='all:initial;display:block;position:fixed;inset:0;z-index:2147483647;cursor:crosshair;touch-action:none;';
+  const shadow=host.attachShadow({mode:'closed'});shadow.innerHTML=`<style>:host{all:initial}.box{position:fixed;border:2px solid #f26628;box-sizing:border-box;background:#f2662810;box-shadow:0 0 0 9999px #0007;pointer-events:none;display:none}.hint{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:10px 14px;border-radius:7px;background:#242426;color:#fff;font:13px system-ui,sans-serif;box-shadow:0 4px 20px #0008;pointer-events:none}</style><div class="box"></div><div class="hint">Drag to select. Hold near an edge to scroll. Esc to cancel.</div>`;
+  const box=shadow.querySelector('.box');document.documentElement.append(host);let origin=null,point=null,frame=0;
+  const update=()=>{if(!origin||!point)return;const x=point.x+scrollX,y=point.y+scrollY,left=Math.min(origin.x,x),top=Math.min(origin.y,y),right=Math.max(origin.x,x),bottom=Math.max(origin.y,y);box.style.display='block';box.style.left=(left-scrollX)+'px';box.style.top=(top-scrollY)+'px';box.style.width=(right-left)+'px';box.style.height=(bottom-top)+'px'};
+  const tick=()=>{if(!origin||!point)return;const edge=70,speed=point.y<edge?-Math.ceil((edge-point.y)/5):point.y>innerHeight-edge?Math.ceil((point.y-(innerHeight-edge))/5):0;if(speed){window.scrollBy(0,speed);update()}frame=requestAnimationFrame(tick)};
+  const cleanup=value=>{cancelAnimationFrame(frame);window.removeEventListener('keydown',onKey,true);window.removeEventListener('scroll',update,true);host.remove();resolve(value)};
+  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cleanup(null)}};window.addEventListener('keydown',onKey,true);window.addEventListener('scroll',update,true);
+  host.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();origin={x:e.clientX+scrollX,y:e.clientY+scrollY};point={x:e.clientX,y:e.clientY};host.setPointerCapture(e.pointerId);update();frame=requestAnimationFrame(tick)});
+  host.addEventListener('pointermove',e=>{if(!origin)return;e.preventDefault();point={x:Math.max(0,Math.min(innerWidth,e.clientX)),y:Math.max(0,Math.min(innerHeight,e.clientY))};update()});
+  host.addEventListener('pointerup',e=>{if(!origin)return;e.preventDefault();e.stopPropagation();const x=point.x+scrollX,y=point.y+scrollY;const selection={left:Math.min(origin.x,x),top:Math.min(origin.y,y),width:Math.abs(x-origin.x),height:Math.abs(y-origin.y)};cleanup(selection.width>=2&&selection.height>=2?selection:null)});
+  host.addEventListener('pointercancel',()=>cleanup(null));
+ })});
+ const region=result[0]?.result;if(!region)return;
+ try{await captureFullPage(tab,region)}catch(error){await chrome.scripting.executeScript({target:{tabId:tab.id},func:message=>{const notice=document.createElement('div');notice.textContent=`Sightline: ${message}`;notice.style.cssText='all:initial;position:fixed;z-index:2147483647;right:20px;top:20px;max-width:360px;padding:14px 18px;border-radius:8px;background:#29292c;color:#fff;font:13px system-ui;box-shadow:0 8px 30px #0009';document.documentElement.append(notice);setTimeout(()=>notice.remove(),7000)},args:[error.message||String(error)]}).catch(()=>{});throw error}
+
 }
 
 async function record(){const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)return;const existing=await chrome.offscreen.hasDocument();if(!existing)await chrome.offscreen.createDocument({url:'recorder.html',reasons:['USER_MEDIA'],justification:'Record the current browser tab'});const stream=await chrome.tabCapture.getMediaStreamId({targetTabId:tab.id});const result=await chrome.runtime.sendMessage({type:'start',stream,title:tab.title,url:tab.url});if(result?.error)throw Error(result.error);}
