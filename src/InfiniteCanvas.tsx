@@ -18,8 +18,8 @@ import { ScrollCoverImage } from './components/ScrollCoverImage';
 
 export const CANVAS_CARD_W = 320;
 export const CANVAS_CARD_H = 180;
-/** No cap: every video in view plays. Videos outside the viewport are not mounted. */
-export const CANVAS_MAX_PLAYING = Number.MAX_SAFE_INTEGER;
+/** Most in-view videos that autoplay at once (nearest the centre first). Hovering a tile always plays it. */
+export const CANVAS_MAX_PLAYING = 9;
 export const CANVAS_GAP = 20;
 export const CANVAS_CELL_W = CANVAS_CARD_W + CANVAS_GAP;
 export const CANVAS_CELL_H = CANVAS_CARD_H + CANVAS_GAP;
@@ -72,7 +72,6 @@ const CanvasCell = memo(function CanvasCell({ col, row, item, selected, detail, 
     <img
       src={src}
       alt={item.title}
-      loading="lazy"
       decoding="async"
       draggable={false}
       onError={() => setImgFailed(true)}
@@ -89,7 +88,7 @@ const CanvasCell = memo(function CanvasCell({ col, row, item, selected, detail, 
         title={item.title}
       >
         {!imgFailed && item.imageSrc ? (
-          <ScrollCoverImage src={item.imageSrc} alt={item.title} loading="lazy" decoding="async" draggable={false} onError={() => setImgFailed(true)} />
+          <ScrollCoverImage src={item.imageSrc} alt={item.title} decoding="async" draggable={false} onError={() => setImgFailed(true)} />
         ) : (
           <div className="canvas-tile-placeholder">
             <Globe size={22} />
