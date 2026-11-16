@@ -40,7 +40,7 @@
     },
     "capture-area": {
       "suggested_key": {
-        "default": "Alt+Shift+A"
+        "default": "Ctrl+Shift+D"
       },
       "description": "Capture part of the visible tab"
     }
@@ -54,5 +54,18 @@
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "shortcuts.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
 }

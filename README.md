@@ -32,3 +32,24 @@ Run `bun run build` for the frontend, `bun test logic.test.ts` for grouping and 
 On this machine the Visual C++ Build Tools are installed and `cargo check --manifest-path src-tauri/Cargo.toml` passes.
 
 
+
+### Post Ideas
+
+Choose the **Post Ideas** category in the library to save links, notes, images, videos, or a combination. Social post links attempt a media download after saving; use **Download post media** in the inspector to retry. The link remains saved if the download fails. Downloads use [gallery-dl](https://github.com/mikf/gallery-dl); install it with `python -m pip install --user gallery-dl` and make sure Python is on PATH. Some sites require an authenticated gallery-dl session or cookies; see its [authentication instructions](https://github.com/mikf/gallery-dl/wiki/Authentication). Imported media is stored in your library.
+
+## Discover catalog
+
+Discover initializes a writable catalog in Sightline's application data directory from the bundled catalog. A refresh merges the current Lapa Ninja RSS feed, recent Bookmarkify listings, and new entries from the third-party Awwwards SOTD index by destination and source URL; it does not delete entries, including websites hidden through the context menu. The Refresh button checks these sources immediately, and Discover checks again when opened or reconnected after 24 hours. Failed individual entries are reported and retried. The feed is finite; if there is no overlap with the stored catalog, the status warns that older entries may be missing. Python is required for this refresh. On Windows, opening Discover registers a login shortcut, an hourly check, and a Windows network-connect trigger; the hourly task refreshes only when at least 24 hours have passed since the last successful check. An offline computer is checked at login and when Windows reports a network connection; the hourly check is a fallback. The app reports when the SOTD index is stale; other sources are not yet implemented.
+
+The color filter uses up to two source-provided Awwwards colors where available and can read separately checkpointed live-page colors from application data. Live colors are estimates from visible computed page styles, not certified branding. `scripts/discover-colors.py` merges those colors from the index into a catalog. `scripts/discover-brand-colors.py` can enrich remaining sites via Context.dev after an API key and call limit are provided; it uses no thumbnail-derived colors. Brand lookups consume service credits. Visited and removed state remains in the local webview. The Backup and Restore controls include it, the catalog, palettes, and the library in explicit snapshots stored in a user-selected Google Drive for desktop folder. Drive for desktop handles uploading those files. Restores require an empty target folder and preserve existing local data. This is manual snapshot backup and restore, not automatic two-way sync.
+
+### Asset annotation data
+
+Annotations are saved as structured objects in each asset's `annotations` array in `library.json`, alongside its `tags` and `notes`. Each annotation has a stable `id`, `text`, and normalized coordinates `x`, `y`, `w`, and `h` (fractions of the saved media dimensions; zero width and height indicate a point). Video annotations also have `start` and `end` in seconds relative to the saved video. The active interval is inclusive at its endpoints. Image annotations have no time range. Older video annotations may have a single `time` field; the app displays them around that timestamp and converts them to a range when edited. When capture clips are trimmed or reordered, ranges are mapped to the saved video's timeline; an annotation crossing removed material may become multiple objects with unique IDs.
+
+
+### UI foundation and extension builds
+
+Sightline now uses the [tauri-ui](https://github.com/agmmnn/tauri-ui) foundation: official shadcn/ui components and Radix primitives. Both desktop and browser extension import `src/theme.css` and `src/components/ui`. Custom capture, timeline and visual-library layouts use those same semantic tokens. HeroUI and the previous stylesheet layers have been removed.
+
+`bun run build` builds the desktop frontend and the React extension UI. Use `bun run build:extension` when only updating the extension. Load `extension/` as an unpacked extension after building; the HTML pages load their generated `extension/ui` assets. Reopen the popup or reload the extension after a UI update. Capture, native messaging and recording storage keep their existing implementation.

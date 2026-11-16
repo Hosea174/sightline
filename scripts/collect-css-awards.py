@@ -1,0 +1,10 @@
+﻿import subprocess,json,shutil,time
+from pathlib import Path
+cli=shutil.which('agent-browser');out=Path('scripts/css-seed.json');rows=json.loads(out.read_text(encoding='utf8')) if out.exists() else []
+js='''(async()=>{const doc=new DOMParser().parseFromString(await (await fetch('/wotd-award-winners?page=PAGE')).text(),'text/html');const paths=[...new Set([...doc.querySelectorAll('a[href^="/sites/"]')].map(a=>a.getAttribute('href')))];let result=[];for(let i=0;i<paths.length;i+=3){let batch=await Promise.all(paths.slice(i,i+3).map(async path=>{try{let r=await fetch(path);if(!r.ok)return null;let d=new DOMParser().parseFromString(await r.text(),'text/html');let a=d.querySelector('a.single-website__thumbnail');let h=d.querySelector('h1')?.textContent.trim()||'';let m=h.match(/(20\\d{2})\\s+([A-Za-z]{3})\\s+(\\d{1,2})/);if(!a||!m)return null;let date=new Date(`${m[2]} ${m[3]}, ${m[1]} UTC`).toISOString().slice(0,10);let url=a.getAttribute('href');let image=d.querySelector('meta[property="og:image"]')?.content||'';let title=d.querySelector('h2')?.textContent.trim()||'';let tags=[...d.querySelectorAll('a[href*="/tags/"]')].map(a=>a.textContent.trim()).filter(Boolean);return {title,url,image,tags,sources:[{name:'CSS Design Awards',url:new URL(path,location.origin).href,date,awards:['Website of the Day']}]};}catch{return null}}));result.push(...batch.filter(Boolean));}return {paths:paths.length,result};})()'''
+for page in range(1,100):
+ p=subprocess.run([cli,'--session','sightline-research','eval','--stdin','--json'],input=js.replace('PAGE',str(page)),capture_output=True,text=True,encoding='utf8',timeout=180)
+ try:j=json.loads(p.stdout)['data']['result'];found=j['result']
+ except Exception: print('error page',page,p.stderr[:200],flush=True);break
+ recent=[x for x in found if x['sources'][0]['date']>='2023-01-01'];rows.extend(recent);out.write_text(json.dumps(rows,ensure_ascii=False,separators=(',',':')),encoding='utf8');print('page',page,'found',len(found),'recent',len(recent),'total',len(rows),flush=True)
+ if not j['paths'] or (found and not recent):break

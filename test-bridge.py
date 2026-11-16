@@ -11,11 +11,12 @@ with tempfile.TemporaryDirectory(prefix='sightline-bridge-test-') as d:
  proc=start();matched=send(proc,{'type':'tags','url':'https://www.example.com/b'});assert matched['source']['tags']==['Motion','SaaS'] and matched['source']['category']=='Illustration';proc.stdin.close();assert proc.wait()==0
  proc=start();image_id=str(uuid.uuid4());assert send(proc,{'type':'begin','id':image_id,'extension':'gif','title':'Image source','url':'https://example.com/page','name':'animated.gif'})['ok'];assert send(proc,{'type':'chunk','data':list(b'GIF89a-test')})['ok'];assert send(proc,{'type':'end'})['ok'];proc.stdin.close();assert proc.wait()==0;image_meta=json.loads((inbox/(image_id+'.json')).read_text());assert image_meta['kind']=='image' and image_meta['name']=='animated.gif' and (inbox/(image_id+'.gif')).read_bytes()==b'GIF89a-test'
  source=root/'original.webm';subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=20','-t','3','-c:v','libvpx-vp9',str(source)],check=True)
- proc=start();id=str(uuid.uuid4());assert send(proc,{'type':'begin','id':id,'extension':'webm','title':'Test','url':'https://example.com','tags':['Motion'],'category':'Web design','segments':[{'start':0.2,'end':1.2},{'start':1.8,'end':2.4}]})['ok']
+ proc=start();id=str(uuid.uuid4());assert send(proc,{'type':'begin','id':id,'extension':'webm','title':'Test','url':'https://example.com','tags':['Motion'],'category':'Web design','crop':{'x':0.25,'y':0.2,'w':0.5,'h':0.6},'segments':[{'start':0.2,'end':1.2},{'start':1.8,'end':2.4}]})['ok']
  raw=source.read_bytes()
  for i in range(0,len(raw),32768):assert send(proc,{'type':'chunk','data':list(raw[i:i+32768])})['ok']
  assert send(proc,{'type':'end'})['ok'];proc.stdin.close();assert proc.wait()==0
  rendered=inbox/(id+'.mp4');assert rendered.is_file();meta=json.loads((inbox/(id+'.json')).read_text());assert meta['tags']==['Motion'] and meta['file']==rendered.name
  result=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(rendered)],check=True,text=True,capture_output=True);length=float(result.stdout);assert 1.45<=length<=1.8,length
+ dimensions=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','csv=p=0:s=x',str(rendered)],check=True,text=True,capture_output=True).stdout.strip();assert dimensions=='80x54',dimensions
  assert source.exists()
 print('Native bridge tags, clip rendering, metadata, and original preservation passed.')

@@ -4,3 +4,6 @@ src-tauri/target
 .impeccable
 tsconfig.tsbuildinfo
 Sightline-previous.exe
+
+# Generated React UI for the unpacked browser extension
+extension/ui/
