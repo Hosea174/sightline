@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 class Element {
   children=[]; disabled=false; attrs={}; textContent='';
   classList={toggle(){}};
+  addEventListener(type,listener){this['on'+type]=listener}
   append(child){this.children.push(child)}
   setAttribute(name,value){this.attrs[name]=value}
   querySelector(name){return this.parts[name]}

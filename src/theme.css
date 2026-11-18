@@ -78,3 +78,18 @@
   select option { background: hsl(var(--popover)); color: hsl(var(--popover-foreground)); }
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+
+.sightline-title-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: min(280px, calc(100vw - 12px));
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.sightline-title-tooltip[hidden] { display: none; }

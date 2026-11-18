@@ -15,6 +15,10 @@ with tempfile.TemporaryDirectory(prefix='sightline-bridge-test-') as d:
  raw=source.read_bytes()
  for i in range(0,len(raw),32768):assert send(proc,{'type':'chunk','data':list(raw[i:i+32768])})['ok']
  assert send(proc,{'type':'end'})['ok'];proc.stdin.close();assert proc.wait()==0
+ opener=start()
+ assert send(opener,{'type':'open-asset','id':id})['ok']
+ opener.stdin.close()
+ assert opener.wait()==0 and (inbox/(id+'.open')).is_file()
  rendered=inbox/(id+'.mp4');assert rendered.is_file();meta=json.loads((inbox/(id+'.json')).read_text());assert meta['tags']==['Motion'] and meta['file']==rendered.name
  result=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(rendered)],check=True,text=True,capture_output=True);length=float(result.stdout);assert 1.45<=length<=1.8,length
  dimensions=subprocess.run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','stream=width,height','-of','csv=p=0:s=x',str(rendered)],check=True,text=True,capture_output=True).stdout.strip();assert dimensions=='80x54',dimensions
@@ -34,4 +38,4 @@ with tempfile.TemporaryDirectory(prefix='sightline-bridge-test-') as d:
  # Premature EOF after begin + chunk cleans up .part file
  proc=start();aborted_id=str(uuid.uuid4());assert send(proc,{'type':'begin','id':aborted_id,'extension':'png','title':'Aborted','url':'https://example.com'})['ok'];assert send(proc,{'type':'chunk','data':[0x89,0x50,0x4e,0x47]})['ok'];proc.stdin.close();proc.wait()
  assert not (inbox/(aborted_id+'.part')).exists() and not (inbox/(aborted_id+'.png')).exists()
-print('Native bridge tags, clip rendering, font metadata, validation, cleanup, and original preservation passed.')
+print('Native bridge tags, clip rendering, open request, font metadata, validation, cleanup, and original preservation passed.')

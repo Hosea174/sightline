@@ -11,7 +11,7 @@
 .theme-toggle{width:30px;height:30px;padding:6px}
 .theme-toggle svg{width:15px;height:15px}
 .tooltip-with-shortcut{display:inline-flex;align-items:center;gap:7px}
-.tooltip-with-shortcut kbd{font:10px inherit;font-weight:600;padding:1px 5px;border-radius:4px;background:hsl(var(--primary-foreground)/.18);border:1px solid hsl(var(--primary-foreground)/.24);color:currentColor}
+.tooltip-with-shortcut kbd{font:10px inherit;font-weight:600;padding:1px 5px;border-radius:4px;background:hsl(var(--background)/.18);border:1px solid hsl(var(--background)/.24);color:currentColor}
 .tools{padding:0 12px}
 .capture-primary{width:calc(100% - 12px);margin:0 6px 8px;justify-content:flex-start;gap:10px;height:40px;font-size:12px;border-radius:10px;box-shadow:0 2px 8px hsl(var(--primary)/.25)}
 .capture-options{display:flex;flex-direction:column;gap:2px}

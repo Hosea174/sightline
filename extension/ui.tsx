@@ -1,3 +1,4 @@
+import { mountTitleTooltips } from '../src/components/ui/title-tooltips';
 import React,{useState,useEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
@@ -32,6 +33,7 @@ function HoverTooltip({label,shortcut,side='top',children}:HoverTooltipProps){
  return <Tooltip open={open} onOpenChange={()=>{}}>
   <TooltipTrigger asChild>
    {React.cloneElement(children,{
+    'data-sightline-tooltip-trigger':'',
     onPointerEnter:(e:React.PointerEvent)=>{(children.props.onPointerEnter as ((ev:React.PointerEvent)=>void)|undefined)?.(e);setOpen(true)},
     onPointerLeave:(e:React.PointerEvent)=>{(children.props.onPointerLeave as ((ev:React.PointerEvent)=>void)|undefined)?.(e);setOpen(false)},
     onPointerDown:(e:React.PointerEvent)=>{(children.props.onPointerDown as ((ev:React.PointerEvent)=>void)|undefined)?.(e);setOpen(false)},
@@ -287,6 +289,7 @@ function Editor(){
  </div>;
 }
 
+mountTitleTooltips();
 flushSync(()=>createRoot(root).render(<TooltipProvider delayDuration={220}>{mode==='popup'?<Popup/>:<Editor/>}</TooltipProvider>));
 // Keep the proven capture and editing engines; their DOM is mounted before they load.
 const scripts=mode==='popup'?['recordings-db.js','popup.js']:mode==='review'?['recordings-db.js','tags.js','brand.js','crop-editor.js','annotations.js','video-export.js','review.js']:['tags.js','brand.js','crop-editor.js','annotations.js','crop.js'];

@@ -20,8 +20,8 @@ const annotations=createAnnotations(document.getElementById('media-frame'),canva
 function snapshot(crop=editor.get()){return {crop,annotations:annotations.snapshot()}}
 function remember(crop){history.push(snapshot(crop));if(history.length>50)history.shift();future=[];if(loaded)dirty=true;syncHistoryButtons()}
 function undo(redo=false){const from=redo?future:history,to=redo?history:future;if(from.length){to.push(snapshot());const state=from.pop();editor.set(state.crop||state);if(state.annotations)annotations.restore(state.annotations);dirty=true}syncHistoryButtons()}
-document.getElementById('undo').onclick=()=>undo();document.getElementById('redo').onclick=()=>undo(true);
-resetCrop.onclick=()=>{const r=editor.get(),full=editor.isFull();if(!full)remember(r);editor.reset()};
+document.getElementById('undo').addEventListener('click',()=>undo());document.getElementById('redo').addEventListener('click',()=>undo(true));
+resetCrop.addEventListener('click',()=>{const r=editor.get(),full=editor.isFull();if(!full)remember(r);editor.reset()});
 function toggleCrop(){
  const next=!editor.isActive();
  if(next)annotations.setDrawing?.(false);

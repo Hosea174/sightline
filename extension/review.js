@@ -44,8 +44,8 @@ function undo(redo=false){
  syncHistoryButtons();
 }
 syncHistoryButtons();
-$('undo').onclick=()=>undo();$('redo').onclick=()=>undo(true);
-resetCrop.onclick=()=>{const r=cropEditor.get(),full=cropEditor.isFull?cropEditor.isFull():(r.x===0&&r.y===0&&r.w===1&&r.h===1);if(!full)remember(r);cropEditor.reset()};
+$('undo').addEventListener('click',()=>undo());$('redo').addEventListener('click',()=>undo(true));
+resetCrop.addEventListener('click',()=>{const r=cropEditor.get(),full=cropEditor.isFull?cropEditor.isFull():(r.x===0&&r.y===0&&r.w===1&&r.h===1);if(!full)remember(r);cropEditor.reset()});
 function toggleCrop(){
  const next=!(cropEditor.isActive?.());
  if(next)annotations.setDrawing?.(false);
@@ -68,7 +68,7 @@ function applyTimelineLayout(){
  }
 }
 function toggleTimeline(){timelineMinimized=!timelineMinimized;writeStorage('sightline-timeline-minimized',timelineMinimized);applyTimelineLayout()}
-if(timelineToggle)timelineToggle.onclick=toggleTimeline;
+if(timelineToggle)timelineToggle.addEventListener('click',toggleTimeline);
 if(timelineResizer&&timelinePanel){
  let resizeDrag=null;
  timelineResizer.onpointerdown=e=>{
@@ -304,11 +304,11 @@ video.onended=()=>{
 };
 video.onplay=()=>{render();startRaf()};
 video.onpause=()=>{if(typeof cancelAnimationFrame==='function')cancelAnimationFrame(rafId);render()};
-play.onclick=()=>{if(video.paused){status.textContent='';const last=timelineEnd();if(playhead>=last-frame)playhead=timelineStart();else{const c=clips[locate(playhead)];if(c&&playhead<c.at)playhead=c.at}setTime(playhead);video.play().catch(e=>{if(e.name!=='AbortError')status.textContent='Playback failed. Try playing the clip again.'})}else video.pause()};
+play.addEventListener('click',()=>{if(video.paused){status.textContent='';const last=timelineEnd();if(playhead>=last-frame)playhead=timelineStart();else{const c=clips[locate(playhead)];if(c&&playhead<c.at)playhead=c.at}setTime(playhead);video.play().catch(e=>{if(e.name!=='AbortError')status.textContent='Playback failed. Try playing the clip again.'})}else video.pause()});
 function split(){const c=clips[selected],offset=playhead-c?.at,spd=clipSpeed(c),minLen=frame/spd;if(!c||offset<=minLen||offset>=width(c)-minLen)return;remember();const t=c.start+offset*spd;clips.splice(selected,1,{start:c.start,end:t,at:c.at,speed:spd},{start:t,end:c.end,at:playhead,speed:spd});selected++;playingClip=selected;render()}
 function remove(){if(clips.length<=1){status.textContent='Keep at least one clip.';return}remember();clips.splice(selected,1);selected=Math.max(0,Math.min(selected,clips.length-1));normalizeStart();syncDuration();setTime(Math.min(playhead,timelineEnd()))}
-$('split').onclick=split;$('delete').onclick=remove;
-$('reset').onclick=()=>{video.pause();remember();clips=[{start:0,end:metadataDuration,at:0,speed:1}];cropEditor.reset();annotations.restore([]);selected=0;playingClip=0;duration=metadataDuration;drawRuler();setTime(0)};
+$('split').addEventListener('click',split);$('delete').addEventListener('click',remove);
+$('reset').addEventListener('click',()=>{video.pause();remember();clips=[{start:0,end:metadataDuration,at:0,speed:1}];cropEditor.reset();annotations.setDrawing(false);annotations.restore([]);selected=0;playingClip=0;duration=metadataDuration;drawRuler();setTime(0)});
 function isTextEntry(target){if(!target)return false;const isEl=typeof Element==='undefined'?Boolean(target.tagName):target instanceof Element;if(!isEl)return false;if(target.isContentEditable||target.closest?.('.annotation-editor'))return true;if(target.tagName==='TEXTAREA'||target.tagName==='SELECT')return true;if(target.tagName==='INPUT'){const t=(target.getAttribute('type')||'text').toLowerCase();return !/^(range|button|checkbox|radio|submit|reset|color|file)$/.test(t)}return false}
 function isDialogOpen(){return Boolean(document.querySelector?.('[role="dialog"][data-state="open"],[role="menu"][data-state="open"]'))}
 async function confirmAction(opts){

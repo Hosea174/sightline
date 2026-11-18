@@ -1,3 +1,4 @@
+import { mountTitleTooltips } from './components/ui/title-tooltips';
 import { DesktopVideoTimeline } from './components/DesktopVideoTimeline';
 import { exportEditedVideoAsset, insertExportedAssetIntoSources } from './lib/videoEditorService';
 import { ChoiceMenu } from './components/ui/choice-menu';
@@ -1281,4 +1282,5 @@ function FontPreview({group,selectedAsset,src,nativeApp,fontStatus,onSelectVaria
 }
 
 installAppEffects();
+mountTitleTooltips();
 createRoot(document.getElementById('root')!).render(<VideoPlaybackProvider><App/></VideoPlaybackProvider>);

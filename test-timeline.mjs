@@ -1,7 +1,7 @@
 import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';
 const events={};
 class ClassList{constructor(){this.set=new Set()}toggle(k,f){if(f===undefined){if(this.set.has(k)){this.set.delete(k);return false}this.set.add(k);return true}if(f)this.set.add(k);else this.set.delete(k);return f}contains(k){return this.set.has(k)}}
-class El{constructor(id=''){this.id=id;this.style={};this.dataset={};this.value='';this.children=[];this._text='';this.paused=true;this.currentTime=0;this.playbackRate=1;this.duration=10;this.videoWidth=160;this.videoHeight=90;this.tagName='DIV';this.attrs={};this.classList=new ClassList()}set textContent(value){this._text=value;this.children=[]}get textContent(){return this._text}append(el){this.children.push(el)}setAttribute(k,v){this.attrs[k]=v}getAttribute(k){return this.attrs[k]}setPointerCapture(){}getBoundingClientRect(){return {left:0,width:100,height:210}}pause(){this.paused=true}play(){this.paused=false;return Promise.resolve()}}
+class El{constructor(id=''){this.id=id;this.style={};this.dataset={};this.value='';this.children=[];this._text='';this.paused=true;this.currentTime=0;this.playbackRate=1;this.duration=10;this.videoWidth=160;this.videoHeight=90;this.tagName='DIV';this.attrs={};this.listeners={};this.classList=new ClassList()}set textContent(value){this._text=value;this.children=[]}get textContent(){return this._text}append(el){this.children.push(el)}setAttribute(k,v){this.attrs[k]=v}getAttribute(k){return this.attrs[k]}addEventListener(type, listener){this.listeners[type]=listener}setPointerCapture(){}getBoundingClientRect(){return {left:0,width:100,height:210}}pause(){this.paused=true}play(){this.paused=false;return Promise.resolve()}}
 const nodes={};const panel=new El('timeline-panel');
 const doc={getElementById(id){return nodes[id]??=new El(id)},createElement(){return new El()},querySelector(s){if(s==='.timeline-panel')return panel;return null}};
 let crop={x:0,y:0,w:1,h:1},cropCommit,cropActive=false,savedPayload=null,retimedCalls=0,showToastArgs=null;
@@ -37,19 +37,19 @@ key('KeyC');assert.equal(cropActive,false);
 nodes.clips.children[0].onpointerdown(pointer(0,{dataset:{},closest:()=>null}));events.pointerup();
 nodes.playhead.onpointerdown(pointer(20));events.pointerup();
 key('KeyQ');assert.match(nodes.clips.children[0].getAttribute('aria-label'),/source 00:02\.00 to 00:05\.00, timeline 00:00\.00/);assert.equal(nodes.clock.textContent,'00:00.00 / 00:08.00');
-nodes.reset.onclick();
+nodes.reset.listeners.click();
 nodes.playhead.onpointerdown(pointer(60));events.pointerup();
 key('KeyW');
 nodes.clips.children[0].onpointerdown(pointer(0,{dataset:{},closest:()=>null}));nodes.track.onpointermove(pointer(20));events.pointerup();
 assert.match(nodes.clips.children[0].getAttribute('aria-label'),/timeline 00:01\.20/);
 key('ArrowRight',{key:'ArrowRight',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:07.20 / 00:07.20');
-nodes.play.onclick();assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
+nodes.play.listeners.click();assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
 nodes.video.pause();
 key('ArrowLeft',{key:'ArrowLeft',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
 key('End',{key:'End'});assert.equal(nodes.clock.textContent,'00:07.20 / 00:07.20');
 key('Home',{key:'Home'});assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
 // Speed adjustment & export
-nodes.reset.onclick();
+nodes.reset.listeners.click();
 nodes.speed.value='2';nodes.speed.onchange();
 assert.equal(nodes.duration.textContent,'00:05.00 · 1 clip · out 00:05.00');
 assert.equal(nodes.video.playbackRate,2);
