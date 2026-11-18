@@ -129,6 +129,7 @@
 .speed-select-trigger:hover{color:hsl(var(--foreground))}
 .speed-select-trigger .custom-select-chevron{width:12px;height:12px}
 .timeline-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:none;margin-top:10px}
+.timeline-scroll>:is(.ruler,.track,.annotation-lanes){width:var(--timeline-content-width,100%)}
 .track{height:58px;border:1px solid hsl(var(--border)/.6);border-radius:8px;background:hsl(var(--muted)/.75);position:relative;cursor:crosshair;touch-action:none}
 .help{display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:10px;color:hsl(var(--muted-foreground));margin-top:10px;flex:none}
 .help kbd{font:10px inherit;font-weight:500;color:hsl(var(--foreground));background:hsl(var(--muted));border:1px solid hsl(var(--border)/.7);padding:1px 5px;border-radius:4px;margin-right:4px}

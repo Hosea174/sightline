@@ -21,11 +21,25 @@ function snapshot(crop=cropEditor.get()){return {clips:clips.map(c=>({...c})),cr
 function syncHistoryButtons(){$('undo').disabled=!history.length;$('redo').disabled=!future.length}
 function pushHistory(entry){history.push(entry);if(history.length>50)history.shift();future=[];if(loaded)dirty=true;syncHistoryButtons()}
 function remember(crop){pushHistory(snapshot(crop))}
-function drawRuler(){if(!ruler||!duration)return;ruler.textContent='';for(let i=0;i<=4;i++){const tick=document.createElement('span');tick.className='tick';tick.style.left=(i*25)+'%';tick.textContent=format(duration*i/4);ruler.append(tick)}}
+function drawRuler(){
+ if(!ruler||!duration)return;
+ track.parentElement?.style.setProperty('--timeline-content-width',`${duration/metadataDuration*100}%`);
+ const step=metadataDuration/4;
+ const times=Array.from({length:Math.ceil(duration/step)},(_,i)=>i*step);
+ // Avoid overlapping labels if the extension ends just beyond a regular tick.
+ if(times.length>5&&times.at(-1)>metadataDuration&&duration-times.at(-1)<step*.45)times.pop();
+ times.push(duration);
+ ruler.textContent='';
+ for(const time of times){
+  const tick=document.createElement('span');
+  tick.className='tick';tick.style.left=(time/duration*100)+'%';tick.textContent=format(time);ruler.append(tick);
+ }
+}
 function syncDuration(){
  if(!metadataDuration)return;
  const maxEnd=timelineEnd();
- const next=Math.max(frame,maxEnd);
+ // Keep the source scale when edits shorten the clip. Extend only to fit slower clips.
+ const next=Math.max(metadataDuration,maxEnd);
  if(Math.abs(next-duration)>1e-4){duration=next;drawRuler()}
 }
 function undo(redo=false){
@@ -123,7 +137,7 @@ if(speedSelect){
 }
 
 function locate(t){let i=clips.findIndex(c=>t>=c.at&&t<end(c));if(i>=0)return i;i=clips.findIndex(c=>c.at>t);return i<0?clips.length-1:i}
-function setTime(t){if(!duration||!clips.length)return;playhead=clamp(t,0,duration);playingClip=locate(playhead);const c=clips[playingClip];const spd=clipSpeed(c);const target=clamp(c.start+(playhead-c.at)*spd,c.start,c.end);if(Math.abs(video.currentTime-target)>0.001)video.currentTime=target;if('playbackRate' in video)video.playbackRate=spd;render()}
+function setTime(t){if(!duration||!clips.length)return;playhead=clamp(t,0,timelineEnd());playingClip=locate(playhead);const c=clips[playingClip];const spd=clipSpeed(c);const target=clamp(c.start+(playhead-c.at)*spd,c.start,c.end);if(Math.abs(video.currentTime-target)>0.001)video.currentTime=target;if('playbackRate' in video)video.playbackRate=spd;render()}
 function normalizeStart(){const first=Math.min(...clips.map(c=>c.at));if(first>0){clips.forEach(c=>c.at-=first);playhead=Math.max(0,playhead-first);annotations.shiftTiming?.(0,-first)}}
 function render(){
  if(!duration)return;
@@ -132,31 +146,20 @@ function render(){
  clipsNode.textContent='';
  clips.forEach((c,i)=>{
   const el=document.createElement('div');
-  const isRetiming=Boolean(drag&&drag.side==='speed'&&drag.i===i);
+  const isRetiming=Boolean(drag&&drag.side?.startsWith('speed-')&&drag.i===i);
   el.className='clip'+(i===selected?' selected':'')+(isRetiming?' retiming':'');
   el.style.left=(c.at/duration*100)+'%';
   el.style.width=(width(c)/duration*100)+'%';
   el.tabIndex=0;
   const spd=clipSpeed(c),spdTag=Math.abs(spd-1)>1e-4?` · ${spd}×`:'';
   el.setAttribute('aria-label',`Clip ${i+1}, source ${format(c.start)} to ${format(c.end)}, timeline ${format(c.at)}${spdTag}`);
-  el.innerHTML='<span class="handle left" data-side="left"></span><span class="clip-speed-bar" data-side="speed" title="Drag left/right to adjust speed · Shift for 0.25× steps · Double-click to reset (1×)"><span class="clip-speed-grip" aria-hidden="true"></span></span><div class="clip-label">Video '+(i+1)+spdTag+'</div><span class="handle right" data-side="right"></span>'+(isRetiming?`<div class="clip-speed-readout">${spd}× · ${format(width(c))}</div>`:'');
-  const speedBar=el.querySelector?.('.clip-speed-bar');
-  if(speedBar){
-   speedBar.ondblclick=ev=>{
-    ev.preventDefault();ev.stopPropagation();
-    selected=i;video.pause();
-    setClipSpeed(i,1);
-   };
-  }
+  const grip=side=>`<span class="clip-speed-handle ${side}" data-side="speed-${side}" title="Drag inward to speed up or outward to slow down · Shift for 0.25× steps"></span>`;
+  el.innerHTML=grip('left')+grip('right')+'<span class="handle left" data-side="left" title="Trim start"></span><div class="clip-label">Video '+(i+1)+spdTag+'</div><span class="handle right" data-side="right" title="Trim end"></span>'+(isRetiming?`<div class="clip-speed-readout">${spd}× · ${format(width(c))}</div>`:'');
   el.onpointerdown=e=>{
    if(e.button!==undefined&&e.button!==0)return;
    e.preventDefault();e.stopPropagation();
    selected=i;video.pause();
-   let side=e.target?.dataset?.side||'move';
-   if(side==='move'&&Number.isFinite(e.clientY)&&typeof el.getBoundingClientRect==='function'){
-    const rect=el.getBoundingClientRect();
-    if(rect&&rect.height>0&&(e.clientY-rect.top)<=rect.height*0.2)side='speed';
-   }
+   const side=e.target?.closest?.('[data-side]')?.dataset?.side||e.target?.dataset?.side||'move';
    const trackRect=track.getBoundingClientRect?.();
    drag={
     i,
@@ -172,7 +175,7 @@ function render(){
     before:snapshot()
    };
    track.setPointerCapture(e.pointerId);
-   render();
+   if(!side.startsWith('speed-'))render();
   };
   clipsNode.append(el);
  });
@@ -184,11 +187,12 @@ function render(){
   }
  }
  head.style.left=(playhead/duration*100)+'%';
+ head.setAttribute('aria-valuemax',timelineEnd().toFixed(2));
  head.setAttribute('aria-valuenow',playhead.toFixed(2));
- $('clock').textContent=`${format(playhead)} / ${format(duration)}`;
+ $('clock').textContent=`${format(playhead)} / ${format(timelineEnd())}`;
  const outLen=clips.reduce((sum,c)=>sum+width(c),0);
- const speedSummary=clips.some(c=>Math.abs(clipSpeed(c)-1)>1e-4)?` · out ${format(outLen)}`:'';
- $('duration').textContent=`${format(duration)} · ${clips.length} ${clips.length===1?'clip':'clips'}${speedSummary}`;
+ const editSummary=Math.abs(outLen-metadataDuration)>1e-4?` · out ${format(outLen)}`:'';
+ $('duration').textContent=`${format(duration)} · ${clips.length} ${clips.length===1?'clip':'clips'}${editSummary}`;
  play.innerHTML=video.paused?playIcon:pauseIcon;
 }
 function point(e){const r=track.getBoundingClientRect();return clamp((e.clientX-r.left)/r.width*duration,0,duration)}
@@ -197,9 +201,11 @@ track.onpointerdown=e=>{if(e.target.closest('.clip'))return;startSeek(e)};head.o
 track.onpointermove=e=>{
  if(!drag)return;
  if(drag.seek){setTime(point(e));return}
- if(drag.side==='speed'){
+ if(drag.side.startsWith('speed-')){
+  if(!drag.changed&&Math.abs(e.clientX-drag.x)<2)return;
   const o=drag.original,origSpd=clipSpeed(o),sourceLen=Math.max(frame,o.end-o.start),origWidth=sourceLen/origSpd;
-  const d=(e.clientX-drag.x)/Math.max(1,drag.trackWidth)*drag.originalDuration;
+  const direction=drag.side==='speed-left'?-1:1;
+  const d=direction*(e.clientX-drag.x)/Math.max(1,drag.trackWidth)*drag.originalDuration;
   const minW=Math.max(frame,sourceLen/4),maxW=sourceLen/0.25;
   const targetWidth=clamp(origWidth+d,minW,maxW);
   const rawSpeed=sourceLen/targetWidth;
@@ -255,8 +261,8 @@ track.onpointermove=e=>{
  }
  drag.changed=true;render();
 };
-window.addEventListener('pointerup',()=>{if(!drag)return;if(drag.changed&&drag.before)pushHistory(drag.before);if(drag.changed&&drag.side==='left'){normalizeStart();setTime(clips[drag.i].at)}else if(drag.changed&&drag.side==='speed'){setTime(clamp(playhead,0,duration))}drag=null;syncDuration();render()});
-window.addEventListener('pointercancel',()=>{if(drag&&drag.changed&&drag.before){clips=drag.before.clips.map(item=>({...item}));annotations.restore(drag.before.annotations||[]);if(Number.isFinite(drag.originalDuration))duration=drag.originalDuration;if(Number.isFinite(drag.originalPlayhead))playhead=drag.originalPlayhead;syncDuration()}drag=null;render()});
+window.addEventListener('pointerup',()=>{if(!drag)return;if(drag.side?.startsWith('speed-')&&!drag.changed){drag=null;return}if(drag.changed&&drag.before)pushHistory(drag.before);if(drag.changed&&drag.side==='left'){normalizeStart();setTime(clips[drag.i].at)}else if(drag.changed&&drag.side.startsWith('speed-')){setTime(clamp(playhead,0,duration))}drag=null;syncDuration();render()});
+window.addEventListener('pointercancel',()=>{if(drag&&drag.changed&&drag.before){clips=drag.before.clips.map(item=>({...item}));annotations.restore(drag.before.annotations||[]);if(Number.isFinite(drag.originalPlayhead))playhead=drag.originalPlayhead;syncDuration()}drag=null;render()});
 function stepPlayback(){
  if(!video.paused&&!exporting&&clips.length){
   if(video.seeking){render();return}

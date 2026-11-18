@@ -21,6 +21,8 @@ const context={
 };
 vm.runInNewContext(fs.readFileSync(new URL('./extension/review.js',import.meta.url),'utf8'),context);
 await new Promise(r=>setTimeout(r,10));
+const timelineStyle={};
+nodes.track.parentElement={style:{setProperty:(key,value)=>timelineStyle[key]=value}};
 nodes.video.onloadedmetadata();
 assert.equal(nodes.duration.textContent,'00:10.00 · 1 clip');
 assert.equal(nodes['crop-toggle'].getAttribute('aria-pressed'),'false');
@@ -29,7 +31,7 @@ function key(code,extras={}){events.keydown({code,key:code,ctrlKey:false,metaKey
 function pointer(x,target={dataset:{},closest:()=>null}){return {clientX:x,pointerId:1,target,preventDefault(){},stopPropagation(){}}}
 nodes.playhead.onpointerdown(pointer(50));events.pointerup();assert.equal(nodes.clock.textContent,'00:05.00 / 00:10.00');
 key('KeyB',{ctrlKey:true,altKey:true});assert.equal(nodes.duration.textContent,'00:10.00 · 2 clips');
-key('Delete',{key:'Delete'});assert.equal(nodes.duration.textContent,'00:05.00 · 1 clip');
+key('Delete',{key:'Delete'});assert.equal(nodes.duration.textContent,'00:10.00 · 1 clip · out 00:05.00');
 key('KeyZ',{ctrlKey:true});assert.equal(nodes.duration.textContent,'00:10.00 · 2 clips');
 cropCommit({...crop});crop={x:0.1,y:0.1,w:0.8,h:0.8};key('KeyZ',{ctrlKey:true});assert.equal(crop.x,0);key('KeyY',{ctrlKey:true});assert.equal(crop.x,0.1);
 key('KeyC');assert.equal(cropActive,true);assert.equal(nodes['crop-toggle'].getAttribute('aria-pressed'),'true');
@@ -40,22 +42,41 @@ key('KeyQ');assert.match(nodes.clips.children[0].getAttribute('aria-label'),/sou
 nodes.reset.listeners.click();
 nodes.playhead.onpointerdown(pointer(60));events.pointerup();
 key('KeyW');
+assert.equal(nodes.clips.children[0].style.width,'60%');
+assert.equal(nodes.ruler.children.at(-1).textContent,'00:10.00');
 nodes.clips.children[0].onpointerdown(pointer(0,{dataset:{},closest:()=>null}));nodes.track.onpointermove(pointer(20));events.pointerup();
-assert.match(nodes.clips.children[0].getAttribute('aria-label'),/timeline 00:01\.20/);
-key('ArrowRight',{key:'ArrowRight',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:07.20 / 00:07.20');
-nodes.play.listeners.click();assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
+assert.match(nodes.clips.children[0].getAttribute('aria-label'),/timeline 00:02\.00/);
+key('ArrowRight',{key:'ArrowRight',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:08.00 / 00:08.00');
+nodes.play.listeners.click();assert.equal(nodes.clock.textContent,'00:02.00 / 00:08.00');
 nodes.video.pause();
-key('ArrowLeft',{key:'ArrowLeft',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
-key('End',{key:'End'});assert.equal(nodes.clock.textContent,'00:07.20 / 00:07.20');
-key('Home',{key:'Home'});assert.equal(nodes.clock.textContent,'00:01.20 / 00:07.20');
+key('ArrowLeft',{key:'ArrowLeft',ctrlKey:true,altKey:true});assert.equal(nodes.clock.textContent,'00:02.00 / 00:08.00');
+key('End',{key:'End'});assert.equal(nodes.clock.textContent,'00:08.00 / 00:08.00');
+key('Home',{key:'Home'});assert.equal(nodes.clock.textContent,'00:02.00 / 00:08.00');
 // Speed adjustment & export
 nodes.reset.listeners.click();
 nodes.speed.value='2';nodes.speed.onchange();
-assert.equal(nodes.duration.textContent,'00:05.00 · 1 clip · out 00:05.00');
+assert.equal(nodes.duration.textContent,'00:10.00 · 1 clip · out 00:05.00');
 assert.equal(nodes.video.playbackRate,2);
 await nodes.save.onclick();
 assert.equal(retimedCalls,1);
 assert.equal(JSON.stringify(savedPayload.segments),JSON.stringify([{start:0,end:5}]));
+// The two upper corners shorten the same source segment when dragged inward.
+for(const [side,from,to] of [['speed-left',0,50],['speed-right',100,50]]){
+ nodes.reset.listeners.click();
+ const clip=nodes.clips.children[0];
+ assert.match(clip.innerHTML,/data-side="speed-left"/);
+ assert.match(clip.innerHTML,/data-side="speed-right"/);
+ clip.onpointerdown(pointer(from,{dataset:{side}}));
+ nodes.track.onpointermove(pointer(to));
+ events.pointerup();
+ assert.equal(nodes.clips.children[0].style.width,'50%');
+ assert.match(nodes.clips.children[0].getAttribute('aria-label'),/source 00:00\.00 to 00:10\.00/);
+ assert.equal(nodes.ruler.children.at(-1).textContent,'00:10.00');
+}
+nodes.speed.value='0.5';nodes.speed.onchange();
+assert.equal(nodes.ruler.children.at(-1).textContent,'00:20.00');
+assert.equal(nodes.ruler.children.find(tick=>tick.textContent==='00:10.00').style.left,'50%');
+assert.equal(timelineStyle['--timeline-content-width'],'200%');
 // Ctrl+` minimize/restore timeline
 key('Backquote',{ctrlKey:true});assert.equal(panel.classList.contains('minimized'),true);
 key('Backquote',{ctrlKey:true});assert.equal(panel.classList.contains('minimized'),false);
