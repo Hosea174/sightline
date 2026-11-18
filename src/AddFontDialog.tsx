@@ -1,3 +1,4 @@
+import { ChoiceMenu } from './components/ui/choice-menu';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
@@ -864,39 +865,18 @@ export function AddFontDialog({
                         <Badge variant="secondary">{row.format}</Badge>
                         <span title={row.name}>{row.name}</span>
                       </div>
-                      <select
-                        aria-label={`Weight for ${row.name}`}
-                        value={row.weight}
-                        onChange={(e) =>
-                          setUploadRows((prev) =>
-                            prev.map((r) =>
-                              r.id === row.id ? { ...r, weight: Number(e.target.value) } : r
-                            )
-                          )
-                        }
-                      >
-                        {WEIGHT_OPTIONS.map((w) => (
-                          <option key={w} value={w}>
-                            {w} {formatFontWeightLabel(w)}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        aria-label={`Style for ${row.name}`}
+                      <ChoiceMenu
+                        label={`Weight for ${row.name}`}
+                        value={String(row.weight)}
+                        options={WEIGHT_OPTIONS.map(weight => ({value:String(weight),label:`${weight} ${formatFontWeightLabel(weight)}`}))}
+                        onChange={value => setUploadRows(rows => rows.map(item => item.id === row.id ? {...item,weight:Number(value)} : item))}
+                      />
+                      <ChoiceMenu
+                        label={`Style for ${row.name}`}
                         value={row.style}
-                        onChange={(e) =>
-                          setUploadRows((prev) =>
-                            prev.map((r) =>
-                              r.id === row.id
-                                ? { ...r, style: e.target.value as 'normal' | 'italic' }
-                                : r
-                            )
-                          )
-                        }
-                      >
-                        <option value="normal">Normal</option>
-                        <option value="italic">Italic</option>
-                      </select>
+                        options={[{value:'normal',label:'Normal'},{value:'italic',label:'Italic'}]}
+                        onChange={value => setUploadRows(rows => rows.map(item => item.id === row.id ? {...item,style:value === 'italic' ? 'italic' : 'normal'} : item))}
+                      />
                       <Button
                         type="button"
                         variant="ghost"

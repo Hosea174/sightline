@@ -1,7 +1,20 @@
 import concurrent.futures,hashlib,json,mimetypes,os,sys,tempfile,urllib.request
 from pathlib import Path
 
-catalog=Path(sys.argv[1]); images=catalog.parent/'discover-images'; images.mkdir(exist_ok=True)
+catalog=Path(sys.argv[1])
+# Share the catalog lock with refresh and edits across app processes.
+lock_file=open(catalog.with_suffix('.lock'),'a+b')
+lock_file.seek(0); lock_file.write(b'0'); lock_file.flush(); lock_file.seek(0)
+try:
+    if os.name=='nt':
+        import msvcrt
+        msvcrt.locking(lock_file.fileno(),msvcrt.LK_NBLCK,1)
+    else:
+        import fcntl
+        fcntl.flock(lock_file,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except OSError:
+    raise SystemExit('Discover is already updating')
+images=catalog.parent/'discover-images'; images.mkdir(exist_ok=True)
 retry='--retry' in sys.argv[2:]
 rows=json.loads(catalog.read_text(encoding='utf8')); downloaded=failed=0
 def fetch(row):
@@ -20,7 +33,7 @@ def fetch(row):
                 chunk=response.read(65536)
                 if not chunk: break
                 size+=len(chunk)
-                if size>8_000_000: raise ValueError('image exceeds 8 MB limit')
+                if size>32_000_000: raise ValueError('image exceeds 32 MB limit')
                 chunks.append(chunk)
         data=b''.join(chunks)
         if not mime.startswith('image/'): raise ValueError('not a supported image')

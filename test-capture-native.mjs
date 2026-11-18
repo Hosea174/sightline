@@ -1,8 +1,27 @@
-﻿import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import vm from 'node:vm';import assert from 'node:assert/strict';import {spawn,spawnSync} from 'node:child_process';import {webcrypto} from 'node:crypto';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import vm from 'node:vm';import assert from 'node:assert/strict';import {spawn,spawnSync} from 'node:child_process';import {webcrypto} from 'node:crypto';
 const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'sightline-e2e-')),config=path.join(tmp,'com.sightline.app'),library=path.join(tmp,'library'),inbox=path.join(tmp,'inbox');fs.mkdirSync(config);fs.mkdirSync(library);fs.writeFileSync(path.join(config,'library-path.txt'),library);fs.writeFileSync(path.join(config,'capture-inbox.txt'),inbox);fs.writeFileSync(path.join(library,'library.json'),JSON.stringify([{tags:['Motion','Editorial']}]));
 const original=path.join(tmp,'source.webm');const generated=spawnSync('ffmpeg',['-v','error','-y','-f','lavfi','-i','testsrc2=size=160x90:rate=20','-t','3','-c:v','libvpx-vp9',original]);assert.equal(generated.status,0,String(generated.stderr));
 const exe=path.resolve('src-tauri/target/release/sightline-bridge.exe');let listener;
 function event(){let listeners=[];return{addListener(fn){listeners.push(fn)},removeListener(fn){listeners=listeners.filter(x=>x!==fn)},emit(value){for(const fn of [...listeners])fn(value)}}}
 function connectNative(){const child=spawn(exe,[],{env:{...process.env,APPDATA:tmp},windowsHide:true});const message=event(),disconnect=event();let buffer=Buffer.alloc(0);child.stdout.on('data',data=>{buffer=Buffer.concat([buffer,data]);while(buffer.length>=4&&buffer.length>=4+buffer.readUInt32LE(0)){const length=buffer.readUInt32LE(0),payload=buffer.subarray(4,4+length);buffer=buffer.subarray(4+length);message.emit(JSON.parse(payload.toString()))}});child.on('close',()=>disconnect.emit());child.on('error',()=>disconnect.emit());return{onMessage:message,onDisconnect:disconnect,postMessage(value){const payload=Buffer.from(JSON.stringify(value)),header=Buffer.alloc(4);header.writeUInt32LE(payload.length);child.stdin.write(Buffer.concat([header,payload]))},disconnect(){child.stdin.end()}}}
-const chrome={runtime:{onMessage:{addListener(fn){listener=fn}},connectNative},commands:{onCommand:{addListener(){}}}};vm.runInNewContext(fs.readFileSync('extension/background.js','utf8'),{chrome,crypto:webcrypto,fetch:async()=>new Response(new Blob([fs.readFileSync(original)])),console,Error,Promise,Uint8Array,Array,URL,setTimeout,clearTimeout});
-const call=msg=>new Promise(resolve=>listener(msg,null,resolve));const tagResult=await call({type:'library-tags'});assert.equal(tagResult.tags.join(','),'Editorial,Motion');const saved=await call({type:'save-clip',data:'blob:test',title:'Test site',url:'https://example.com',tags:['Motion'],category:'Web design',segments:[{start:.2,end:1.2},{start:1.8,end:2.4}]});assert.equal(saved.ok,true,JSON.stringify(saved));const manifestFile=fs.readdirSync(inbox).find(x=>x.endsWith('.json'));assert.ok(manifestFile);const metadata=JSON.parse(fs.readFileSync(path.join(inbox,manifestFile)));assert.equal(metadata.tags[0],'Motion');assert.ok(fs.statSync(path.join(inbox,metadata.file)).size>0);assert.ok(fs.existsSync(original));console.log('Extension message through real native host rendered and queued the tagged clip.');
+const validWoff2=Buffer.alloc(48);validWoff2.write('wOF2',0,'ascii');
+const chrome={runtime:{onMessage:{addListener(fn){listener=fn}},connectNative},commands:{onCommand:{addListener(){}}}};vm.runInNewContext(fs.readFileSync('extension/background.js','utf8'),{chrome,crypto:webcrypto,fetch:async u=>u==='blob:font-test'?new Response(new Blob([validWoff2])):u==='blob:bad-font'?new Response(new Blob(['<html>not-a-font</html>']),{headers:{'content-type':'font/woff2'}}):new Response(new Blob([fs.readFileSync(original)])),console,Error,Promise,Uint8Array,Array,URL,setTimeout,clearTimeout});
+const call=msg=>new Promise(resolve=>listener(msg,null,resolve));const tagResult=await call({type:'library-tags'});assert.equal(tagResult.tags.join(','),'Editorial,Motion');const saved=await call({type:'save-clip',data:'blob:test',title:'Test site',url:'https://example.com',tags:['Motion'],category:'Web design',segments:[{start:.2,end:1.2},{start:1.8,end:2.4}]});assert.equal(saved.ok,true,JSON.stringify(saved));const manifestFile=fs.readdirSync(inbox).find(x=>x.endsWith('.json'));assert.ok(manifestFile);const metadata=JSON.parse(fs.readFileSync(path.join(inbox,manifestFile)));assert.equal(metadata.tags[0],'Motion');assert.ok(fs.statSync(path.join(inbox,metadata.file)).size>0);assert.ok(fs.existsSync(original));
+const savedFont=await call({type:'save-font',file:'blob:font-test',extension:'woff2',title:'Test site',url:'https://example.com',name:'Inter 300-700',family:'Inter',weight:400,weightMin:300,weightMax:700,isVariable:true,style:'normal',fontSource:'capture'});
+assert.equal(savedFont.ok,true,JSON.stringify(savedFont));
+const fontManifestFile=fs.readdirSync(inbox).find(x=>x.endsWith('.json')&&x!==manifestFile);
+assert.ok(fontManifestFile);
+const fontMeta=JSON.parse(fs.readFileSync(path.join(inbox,fontManifestFile)));
+assert.equal(fontMeta.kind,'font');
+assert.equal(fontMeta.family,'Inter');
+assert.equal(fontMeta.weight,400);
+assert.equal(fontMeta.weightMin,300);
+assert.equal(fontMeta.weightMax,700);
+assert.equal(fontMeta.isVariable,true);
+assert.equal(fontMeta.style,'normal');
+assert.equal(fontMeta.fontSource,'capture');
+const beforeBad=fs.readdirSync(inbox);
+const badFont=await call({type:'save-font',file:'blob:bad-font',extension:'woff2',title:'Test site',url:'https://example.com',name:'Fake',family:'Fake'});
+assert.ok(badFont.error);
+assert.deepEqual(fs.readdirSync(inbox),beforeBad);
+console.log('Extension message through real native host rendered and queued the tagged clip and font.');

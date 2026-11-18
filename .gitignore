@@ -1,4 +1,4 @@
-﻿node_modules
+node_modules
 dist
 src-tauri/target
 .impeccable
@@ -7,3 +7,6 @@ Sightline-previous.exe
 
 # Generated React UI for the unpacked browser extension
 extension/ui/
+
+__pycache__/
+*.checkpoint.json

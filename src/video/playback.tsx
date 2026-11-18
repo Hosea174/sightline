@@ -61,6 +61,8 @@ type LoopingPreviewProps = {
   /** Track on-screen visibility and only autoplay while visible. Disable when `allowed` already covers it. */
   observeVisibility?: boolean;
   fit?: 'contain' | 'cover';
+  /** Pause the mounted decoder during canvas navigation. */
+  suspended?: boolean;
 };
 
 /**
@@ -68,7 +70,7 @@ type LoopingPreviewProps = {
  * is hovered, or autoplay is on and the preview is allowed and visible. Otherwise the decoder is
  * released and the poster stays.
  */
-export function LoopingPreview({ videoSrc, posterSrc, allowed = true, observeVisibility = true, fit = 'contain' }: LoopingPreviewProps) {
+export function LoopingPreview({ videoSrc, posterSrc, allowed = true, observeVisibility = true, fit = 'contain', suspended = false }: LoopingPreviewProps) {
   const { autoplay } = useVideoPlayback();
   const rootRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
@@ -111,6 +113,13 @@ export function LoopingPreview({ videoSrc, posterSrc, allowed = true, observeVis
   const playing = hovered || (autoplay && allowed && visible);
 
   useEffect(() => {
+    const video = rootRef.current?.querySelector('video');
+    if (!video) return;
+    if (suspended) video.pause();
+    else void video.play().catch(() => {});
+  }, [suspended, playing, videoSrc]);
+
+  useEffect(() => {
     if (!playing) setReady(false);
   }, [playing]);
 
@@ -121,7 +130,7 @@ export function LoopingPreview({ videoSrc, posterSrc, allowed = true, observeVis
         <video
           src={videoSrc}
           className={ready ? 'ready' : undefined}
-          autoPlay
+          autoPlay={!suspended}
           loop
           muted
           playsInline

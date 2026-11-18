@@ -22,6 +22,7 @@ export type FilterGroup = {
   options: string[];
   selected: string[];
   onChange: React.Dispatch<React.SetStateAction<string[]>>;
+  getSwatch?: (option: string) => string | undefined;
 };
 
 const SEARCH_THRESHOLD = 12;
@@ -29,7 +30,7 @@ const SEARCH_THRESHOLD = 12;
 /** Lives inside the submenu, so the search text resets whenever the submenu closes. */
 function FilterOptions({ group }: { group: FilterGroup }) {
   const [query, setQuery] = useState('');
-  const { label, options, selected, onChange } = group;
+  const { label, options, selected, onChange, getSwatch } = group;
   const needle = query.trim().toLowerCase();
   const shown = needle ? options.filter((option) => option.toLowerCase().includes(needle)) : options;
   return (
@@ -48,18 +49,22 @@ function FilterOptions({ group }: { group: FilterGroup }) {
       )}
       <div className="filter-menu-options">
         {shown.length === 0 && <div className="menu-empty">No matches</div>}
-        {shown.map((option) => (
-          <DropdownMenuCheckboxItem
-            key={option}
-            checked={selected.includes(option)}
-            onSelect={(e) => e.preventDefault()}
-            onCheckedChange={() =>
-              onChange((current) => (current.includes(option) ? current.filter((x) => x !== option) : [...current, option]))
-            }
-          >
-            {option}
-          </DropdownMenuCheckboxItem>
-        ))}
+        {shown.map((option) => {
+          const swatch = getSwatch?.(option);
+          return (
+            <DropdownMenuCheckboxItem
+              key={option}
+              checked={selected.includes(option)}
+              onSelect={(e) => e.preventDefault()}
+              onCheckedChange={() =>
+                onChange((current) => (current.includes(option) ? current.filter((x) => x !== option) : [...current, option]))
+              }
+            >
+              {swatch && <span className="color-swatch mr-2" style={{ background: swatch }} aria-hidden="true" />}
+              <span>{option}</span>
+            </DropdownMenuCheckboxItem>
+          );
+        })}
       </div>
       {selected.length > 0 && (
         <>

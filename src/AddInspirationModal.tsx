@@ -1,3 +1,4 @@
+import { ChoiceMenu } from './components/ui/choice-menu';
 import React, { useEffect, useRef, useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
@@ -62,6 +63,16 @@ type Props = {
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp']);
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'mkv']);
 
+const isTextEntryElement = (el: EventTarget | null): el is HTMLElement => {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable) return true;
+  if (/^(TEXTAREA|SELECT)$/.test(el.tagName)) return true;
+  if (el instanceof HTMLInputElement) {
+    return !/^(range|button|checkbox|radio|submit|reset|color|file)$/i.test(el.type);
+  }
+  return false;
+};
+
 function TagInputField({
   id,
   tags,
@@ -77,12 +88,15 @@ function TagInputField({
 }) {
   const [input, setInput] = useState('');
   const [active, setActive] = useState(0);
-  const options = knownTags.filter(
-    (t) =>
-      input.trim() &&
-      t.toLowerCase().includes(input.trim().toLowerCase()) &&
-      !tags.some((x) => x.toLowerCase() === t.toLowerCase())
-  );
+  const [dismissed, setDismissed] = useState(false);
+  const options = dismissed
+    ? []
+    : knownTags.filter(
+        (t) =>
+          input.trim() &&
+          t.toLowerCase().includes(input.trim().toLowerCase()) &&
+          !tags.some((x) => x.toLowerCase() === t.toLowerCase())
+      );
 
   const addTag = (value: string) => {
     const clean = value.trim();
@@ -91,6 +105,7 @@ function TagInputField({
     }
     setInput('');
     setActive(0);
+    setDismissed(false);
   };
 
   return (
@@ -118,6 +133,7 @@ function TagInputField({
           onChange={(e) => {
             setInput(e.target.value);
             setActive(0);
+            setDismissed(false);
           }}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown' && options.length) {
@@ -126,6 +142,9 @@ function TagInputField({
             } else if (e.key === 'ArrowUp' && options.length) {
               e.preventDefault();
               setActive((active + options.length - 1) % options.length);
+            } else if (e.key === 'Escape' && options.length) {
+              e.preventDefault();
+              setDismissed(true);
             } else if (['Enter', 'Tab', ','].includes(e.key) && input.trim()) {
               e.preventDefault();
               addTag(options[active] || input);
@@ -135,6 +154,7 @@ function TagInputField({
           }}
           onBlur={() => {
             if (input.trim()) addTag(input);
+            setDismissed(false);
           }}
         />
       </div>
@@ -291,6 +311,108 @@ export function AddInspirationModal({
     }
   };
 
+  const [reorderUi, setReorderUi] = useState<{
+    dragId: string;
+    overId: string | null;
+    after: boolean;
+  } | null>(null);
+  const suppressAssetClickRef = useRef(false);
+
+  const reorderStagedAssets = (dragId: string, targetId: string, after: boolean) => {
+    if (dragId === targetId) return;
+    setAssets((prev) => {
+      const fromIndex = prev.findIndex((a) => a.id === dragId);
+      if (fromIndex < 0 || !prev.some((a) => a.id === targetId)) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      const targetIndex = next.findIndex((a) => a.id === targetId);
+      if (targetIndex < 0) return prev;
+      next.splice(targetIndex + (after ? 1 : 0), 0, moved);
+      setCoverId(next[0]?.id || null);
+      return next;
+    });
+  };
+
+  const startPointerDrag = (
+    e: React.PointerEvent<HTMLElement>,
+    dragId: string,
+    axis: 'x' | 'y'
+  ) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement | null)?.closest('.remove-asset')) return;
+    const containerEl = e.currentTarget.parentElement;
+    if (!containerEl) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let active = false;
+    let overId: string | null = null;
+    let after = false;
+
+    const pickTarget = (cx: number, cy: number) => {
+      const nodes = Array.from(containerEl.querySelectorAll<HTMLElement>('[data-reorder-id]'));
+      if (!nodes.length) return null;
+      const coord = axis === 'x' ? cx : cy;
+      let bestId: string | null = null;
+      let bestAfter = false;
+      let bestDist = Infinity;
+      for (const node of nodes) {
+        const id = node.dataset.reorderId;
+        if (!id) continue;
+        const r = node.getBoundingClientRect();
+        const start = axis === 'x' ? r.left : r.top;
+        const end = axis === 'x' ? r.right : r.bottom;
+        const mid = (start + end) / 2;
+        const dist = coord < start ? start - coord : coord > end ? coord - end : 0;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestId = id;
+          bestAfter = coord > mid;
+          if (dist === 0) break;
+        }
+      }
+      return bestId ? { id: bestId, after: bestAfter } : null;
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      if (!active) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
+        active = true;
+        suppressAssetClickRef.current = true;
+        document.body.classList.add('reordering-assets');
+      }
+      const target = pickTarget(ev.clientX, ev.clientY);
+      overId = target?.id ?? null;
+      after = target?.after ?? false;
+      setReorderUi((prev) =>
+        prev?.dragId === dragId && prev?.overId === overId && prev?.after === after
+          ? prev
+          : { dragId, overId, after }
+      );
+    };
+
+    const cleanup = (commit: boolean) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      document.body.classList.remove('reordering-assets');
+      setReorderUi(null);
+      if (active) {
+        window.setTimeout(() => {
+          suppressAssetClickRef.current = false;
+        }, 0);
+        if (commit && overId && overId !== dragId) {
+          reorderStagedAssets(dragId, overId, after);
+        }
+      }
+    };
+
+    const onUp = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  };
+
   useEffect(() => {
     if (!open) return;
     const onPaste = (e: ClipboardEvent) => {
@@ -305,9 +427,23 @@ export function AddInspirationModal({
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && !saving) {
-        e.preventDefault();
-        onClose();
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        const activeTarget =
+          (e.target instanceof HTMLElement ? e.target : null) ||
+          (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+        if (
+          activeTarget &&
+          isTextEntryElement(activeTarget) &&
+          !activeTarget.closest('.annotation-note-editor')
+        ) {
+          e.preventDefault();
+          activeTarget.blur();
+          return;
+        }
+        if (!saving) {
+          e.preventDefault();
+          onClose();
+        }
       }
     };
     window.addEventListener('paste', onPaste);
@@ -413,6 +549,21 @@ export function AddInspirationModal({
         aria-modal="true"
         aria-label="Add inspiration"
         onMouseDown={(e) => e.stopPropagation()}
+        onPointerDownCapture={(e) => {
+          const active = document.activeElement;
+          if (!isTextEntryElement(active)) return;
+          const target = e.target as HTMLElement | null;
+          if (
+            !target ||
+            target === active ||
+            target.closest(
+              'input:not([type="range"]),textarea,select,.viewer-tag-field,.viewer-tag-suggestions,.annotation-note-editor,[contenteditable="true"]'
+            )
+          ) {
+            return;
+          }
+          active.blur();
+        }}
       >
         <div className="preview-header">
           <div className="preview-header-left">
@@ -578,13 +729,7 @@ export function AddInspirationModal({
                       </label>
                       <label>
                         <span>Category</span>
-                        <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                          {CATEGORIES.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
+                        <ChoiceMenu label="Category" value={category} onChange={setCategory} options={CATEGORIES.map(value=>({value,label:value}))}/>
                       </label>
                       <div className="viewer-tags-wrap">
                         <label htmlFor="create-source-tags">
@@ -681,49 +826,68 @@ export function AddInspirationModal({
                       </Button>
                     </div>
                     <div className="asset-list">
-                      {assets.map((a) => (
-                        <div
-                          className={'asset-row' + (activeAsset?.id === a.id ? ' active' : '')}
-                          key={a.id}
-                        >
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="asset"
-                            onClick={() => setActiveId(a.id)}
+                      {assets.map((a) => {
+                        const rowCls = [
+                          'asset-row',
+                          activeAsset?.id === a.id ? 'active' : '',
+                          reorderUi?.dragId === a.id ? 'is-reordering' : '',
+                          reorderUi?.overId === a.id && reorderUi.dragId !== a.id
+                            ? reorderUi.after
+                              ? 'drop-after'
+                              : 'drop-before'
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ');
+                        return (
+                          <div
+                            className={rowCls}
+                            key={a.id}
+                            data-reorder-id={a.id}
+                            onPointerDown={(e) => startPointerDrag(e, a.id, 'y')}
                           >
-                            <span className="asset-thumb">
-                              {a.kind === 'image' ? (
-                                <img src={a.previewUrl} alt="" />
-                              ) : (
-                                <Video size={16} />
-                              )}
-                              {a.kind === 'video' && (
-                                <span className="play-badge row-play-badge" aria-hidden="true">
-                                  <Play fill="currentColor" />
-                                </span>
-                              )}
-                            </span>
-                            <div>
-                              <strong>{a.name}</strong>
-                              <span>
-                                {a.kind}
-                                {coverId === a.id ? ' · cover' : ''}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="asset"
+                              onClick={() => {
+                                if (suppressAssetClickRef.current) return;
+                                setActiveId(a.id);
+                              }}
+                            >
+                              <span className="asset-thumb">
+                                {a.kind === 'image' ? (
+                                  <img src={a.previewUrl} alt="" draggable={false} />
+                                ) : (
+                                  <Video size={16} />
+                                )}
+                                {a.kind === 'video' && (
+                                  <span className="play-badge row-play-badge" aria-hidden="true">
+                                    <Play fill="currentColor" />
+                                  </span>
+                                )}
                               </span>
-                            </div>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="remove-asset"
-                            aria-label={`Remove ${a.name}`}
-                            title="Remove"
-                            onClick={() => removeStagedAsset(a.id)}
-                          >
-                            <X size={15} />
-                          </Button>
-                        </div>
-                      ))}
+                              <div>
+                                <strong>{a.name}</strong>
+                                <span>
+                                  {a.kind}
+                                  {coverId === a.id ? ' · cover' : ''}
+                                </span>
+                              </div>
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="remove-asset"
+                              aria-label={`Remove ${a.name}`}
+                              title="Remove"
+                              onClick={() => removeStagedAsset(a.id)}
+                            >
+                              <X size={15} />
+                            </Button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </TabsContent>
@@ -782,28 +946,46 @@ export function AddInspirationModal({
             stageFileObjects(Array.from(e.dataTransfer.files));
           }}
         >
-          {assets.map((a) => (
-            <Button
-              type="button"
-              variant="ghost"
-              key={a.id}
-              aria-label={`View ${a.name}`}
-              aria-pressed={activeAsset?.id === a.id}
-              className={activeAsset?.id === a.id ? 'active' : ''}
-              onClick={() => setActiveId(a.id)}
-            >
-              {a.kind === 'video' ? (
-                <video src={a.previewUrl} muted preload="metadata" />
-              ) : (
-                <img src={a.previewUrl} alt="" />
-              )}
-              {a.kind === 'video' && (
-                <span className="play-badge strip-play-badge" aria-hidden="true">
-                  <Play fill="currentColor" />
-                </span>
-              )}
-            </Button>
-          ))}
+          {assets.map((a) => {
+            const btnCls = [
+              activeAsset?.id === a.id ? 'active' : '',
+              reorderUi?.dragId === a.id ? 'is-reordering' : '',
+              reorderUi?.overId === a.id && reorderUi.dragId !== a.id
+                ? reorderUi.after
+                  ? 'drop-after'
+                  : 'drop-before'
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return (
+              <Button
+                type="button"
+                variant="ghost"
+                key={a.id}
+                data-reorder-id={a.id}
+                aria-label={`View ${a.name}`}
+                aria-pressed={activeAsset?.id === a.id}
+                className={btnCls}
+                onPointerDown={(e) => startPointerDrag(e, a.id, 'x')}
+                onClick={() => {
+                  if (suppressAssetClickRef.current) return;
+                  setActiveId(a.id);
+                }}
+              >
+                {a.kind === 'video' ? (
+                  <video src={a.previewUrl} muted preload="metadata" />
+                ) : (
+                  <img src={a.previewUrl} alt="" draggable={false} />
+                )}
+                {a.kind === 'video' && (
+                  <span className="play-badge strip-play-badge" aria-hidden="true">
+                    <Play fill="currentColor" />
+                  </span>
+                )}
+              </Button>
+            );
+          })}
           <Button
             type="button"
             variant="ghost"

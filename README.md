@@ -4,7 +4,7 @@ A local-first visual research library for websites, screenshots, motion and font
 
 ## Run
 
-Requirements: Bun, Rust with the Windows MSVC toolchain, Microsoft C++ build tools, WebView2, and FFmpeg on PATH. Run `bun install` and `bun run tauri dev`. Choose a local library folder on first launch; `library.json`, a previous-index backup `assets/`, and cached `favicons/` live inside it. You can place the library in a Google Drive for desktop synced folder. Use the library on only one computer at a time, let Drive finish syncing before moving it, and make independent backups.
+Requirements: Bun, Rust with the Windows MSVC toolchain, Microsoft C++ build tools, WebView2, and FFmpeg on PATH. Run `bun install --frozen-lockfile` and `bun run tauri dev`. Choose a local library folder on first launch; `library.json`, a previous-index backup, `assets/`, and cached `favicons/` live inside it. You can place the library in a Google Drive for desktop synced folder. Use the library on only one computer at a time, let Drive finish syncing before moving it, and make independent backups.
 
 Imported screenshots are converted to WebP and videos to H.264 MP4 when the converted file is smaller. MOV and MKV videos are converted to MP4 for playback even if the output is larger. Unsupported formats are copied unchanged. Originals selected for import are never modified. FFmpeg runs in a background worker.
 
@@ -16,10 +16,22 @@ Load `extension/` unpacked in Chrome or Brave, then install the native messaging
 
 Right-click an image and choose Save image to Sightline to queue it with its source page. The popup has visible, area and full-page screenshots, recording and font discovery. Full-page and scrolling area capture scroll the active tab and restore its position after capture; keep the tab active during capture. Screenshots and clips offer source name, link, tags and category before saving. The recording editor supports dragging clips and trim handles, playhead scrubbing, Q/W trim, Ctrl+Alt+B split, Delete, arrow keys, Ctrl+Alt+Left/Right, Home/End and Space; Ctrl+Z and Ctrl+Shift+Z undo and redo. It retains the original recording in browser storage. The bridge renders selected segments with FFmpeg and queues the resulting MP4 for the desktop app; the save status distinguishes a queued capture from a completed import. Tag suggestions and matching source tags and category come from the selected library. Pages on the same website are grouped, while social posts use their individual URLs.
 
+## Editing and Trash
+
+Open a video from its source and press Ctrl+Backtick to show the video timeline. Drag clip edges to trim, split at the playhead, or drag the top of a clip to change its speed. Save clip renders a new asset next to the original. Ctrl+Shift+Period toggles drawing annotations in Sightline and both browser editors. The keyboard icon opens the shortcut guide.
+
+A clip imported from the extension has an Open clip action in Sightline that selects the exact asset in its source. The extension editor also offers Open clip when Sightline is running. Font capture saves the variants it can find, and font cards expose available weights as pills.
+
+Trash moves unshared assets and their previews into the library's `trash/` folder. Restore returns them to their original paths. Clear Trash permanently deletes the items after confirmation. Sightline clears expired items after 30 days. Ctrl+Z restores a recent Trash move or undoes a Discover visit.
+
+## Code layout
+
+`src/` is the React desktop UI and shared component library. `src-tauri/src/` contains the library, video export, and filesystem operations. `extension/` contains the browser editor, popup, and capture workers. The `sightline-bridge` Rust binary connects the two through native messaging. Build and reload the unpacked extension after changing its UI.
+
 ## Known limitations
 
 - Native desktop and real browser capture flows, have not yet passed a real browser-to-library end-to-end test. Review your captures before deleting originals or depending on them.
-- Area capture starts on the website: drag to select and hold near the viewport edge to scroll, then review the captured region in the editor. Full-page capture stitches scroll positions and is limited by page and image dimensions; dynamic pages, nested scroll areas and protected browser pages may not capture correctly. Recording is tab video only, with no audio, and stores recording chunks in IndexedDB as it records. Reviewing and exporting can still consume significant memory. The review screen keeps the original recording until you delete it.
+- Area capture starts on the website: drag to select and hold near the viewport edge to scroll, then review the captured region in the editor. Full-page capture stitches scroll positions and is limited by page and image dimensions; dynamic pages, nested scroll areas and protected browser pages may not capture correctly. Recording is tab video only, with no audio, and stores recording chunks in IndexedDB as it records. Reviewing and exporting can still consume significant memory. Discarding an edit keeps the original in Saved recordings.
 - Font discovery is best-effort: cross-origin stylesheets, obfuscated names, unavailable files, and web-font subsets can limit results. Windows font installation supports TTF and OTF; WOFF/WOFF2 files can be saved and previewed but not directly installed. Installation has not been tested end to end.
 - Color filtering uses a small sampled palette and is approximate. Existing assets from before palette generation are not indexed automatically. Large-library performance work and a full Google Drive restore test remain to be done. Font assets are excluded from the canvas.
 - The library index is JSON, not SQLite. Writes are serialized by the UI, committed by rename, and keep the previous index. Drive is a synchronization tool, not versioned backup; copy the entire folder independently and do not open one library from multiple machines simultaneously.

@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {sameInstagramPost,inspirationUrlKey,sameSource,colorDistance,matches,setTrash,displayUrl,groupSourcesByUrl,toggleFavorite,zoomAround,paginationPages,shuffled,shuffleRank,matchesIndustry,matchesReference,safeHttpUrl,sanitizeFolderName,sourceFolder,renameFolderReferences,CANVAS_MIN_ZOOM,CANVAS_MAX_ZOOM,clampCanvasZoom,computeCanvasGrid,wrapGridIndex,finiteGridIndex,clampFiniteCanvasView,getVisibleCellRange,pickPlayableCells,isFontFilename,parseFontFilenameMeta,buildGoogleFontsCss2Url,groupFontAssets} from './src/logic';
+import {sameInstagramPost,inspirationUrlKey,sameSource,colorDistance,matches,setTrash,displayUrl,groupSourcesByUrl,toggleFavorite,zoomAround,paginationPages,shuffled,shuffleRank,matchesIndustry,matchesReference,safeHttpUrl,sanitizeFolderName,sourceFolder,renameFolderReferences,CANVAS_MIN_ZOOM,CANVAS_MAX_ZOOM,clampCanvasZoom,computeCanvasGrid,wrapGridIndex,finiteGridIndex,clampFiniteCanvasView,getVisibleCellRange,pickPlayableCells,isFontFilename,parseFontFilenameMeta,buildGoogleFontsCss2Url,groupFontAssets,capturedFontAssetFields,getFontFaceWeightDescriptor,getAvailableFontWeightPills} from './src/logic';
 
 test('individual assets retain source notes and tags while matching their own context',()=>{
  const source={title:'Studio',url:'https://example.com',notes:'Editorial layout',tags:['Reference']};
@@ -190,4 +190,497 @@ test('pickPlayableCells caps videos, skips off-screen cells and prefers the cent
   const all=pickPlayableCells(cells,view,{width:1100,height:700},340,200,320,180,100);expect(all.length).toBe(9);expect(pickPlayableCells(cells,view,{width:600,height:700},340,200,320,180,100)).not.toContain('2,0');
   expect(ids[0]).toBe('1,1');
   expect(pickPlayableCells(cells,view,vp,340,200,320,180,0)).toEqual([]);
+});
+
+test('canvas buffer reuses cells for small pans and covers large jumps', async()=>{
+ const {bufferCanvasRange,centerCanvasView}=await import('./src/logic');
+ const previous={minCol:-2,maxCol:6,minRow:-2,maxRow:5};
+ expect(bufferCanvasRange({minCol:1,maxCol:5,minRow:0,maxRow:3},previous,2)).toBe(previous);
+ expect(bufferCanvasRange({minCol:20,maxCol:24,minRow:0,maxRow:3},previous,2)).toEqual({minCol:18,maxCol:26,minRow:-2,maxRow:5});
+ const centered=centerCanvasView(.75,{width:1000,height:700},{cols:8,rows:6},340,200,20);
+ expect(centered.x+(8*340-20)*centered.zoom/2).toBe(500);
+ expect(centered.y+(6*200-20)*centered.zoom/2).toBe(350);
+});
+
+
+test('dragging library thumbnails persists order and makes the first visible asset the cover',async()=>{
+ const {reorderSourceAssets}=await import('./src/logic');
+ const source={coverId:'a',assets:[{id:'a',kind:'image'},{id:'b',kind:'video'},{id:'c',kind:'image'}]};
+ const front=reorderSourceAssets(source,'c','a',false);
+ expect(front.assets.map(a=>a.id)).toEqual(['c','a','b']);
+ expect(front.coverId).toBe('c');
+ const end=reorderSourceAssets(source,'a','c',true);
+ expect(end.assets.map(a=>a.id)).toEqual(['b','c','a']);
+ expect(end.coverId).toBe('b');
+ expect(source.assets.map(a=>a.id)).toEqual(['a','b','c']);
+ expect(reorderSourceAssets(source,'missing','a',false)).toBe(source);
+});
+
+
+test('saving an open annotation note preserves resized geometry and edited timing',async()=>{
+ const {mergeAnnotationNote}=await import('./src/logic');
+ const draft={id:'note',text:'Old',x:.1,y:.2,w:.2,h:.2,start:0,end:2};
+ const resized={...draft,x:.3,y:.4,w:.5,h:.4,start:1,end:4};
+ expect(mergeAnnotationNote([resized],draft,'New')).toEqual({...resized,text:'New'});
+ expect(mergeAnnotationNote([],draft,'New')).toEqual({...draft,text:'New'});
+});
+
+test('webgl spherical lens warp is flat at 0% and cleanly inverts for raycast hit-testing',async()=>{
+ const {warpCanvasPoint,unwarpCanvasPoint,screenToCanvasWorld,computeTileUvTransform}=await import('./src/logic');
+ expect(warpCanvasPoint(0.6,-0.4,0,16/9,0,0)).toEqual({x:0.6,y:-0.4});
+ const warped=warpCanvasPoint(0.65,-0.5,0.8,16/9,0.03,-0.02);
+ const recovered=unwarpCanvasPoint(warped.x,warped.y,0.8,16/9,0.03,-0.02);
+ expect(recovered.x).toBeCloseTo(0.65,3);
+ expect(recovered.y).toBeCloseTo(-0.5,3);
+
+ const cornerWarped=warpCanvasPoint(0.85,-0.85,1,16/9,0,0);
+ const cornerRecovered=unwarpCanvasPoint(cornerWarped.x,cornerWarped.y,1,16/9,0,0);
+ expect(cornerRecovered.x).toBeCloseTo(0.85,3);
+ expect(cornerRecovered.y).toBeCloseTo(-0.85,3);
+
+ const far=warpCanvasPoint(2.2,1.4,1,16/9,0,0);
+ const near=warpCanvasPoint(1.1,0.7,1,16/9,0,0);
+ expect(Math.hypot(far.x,far.y)).toBeGreaterThan(Math.hypot(near.x,near.y));
+
+ const view={x:120,y:80,zoom:1.25};
+ const vp={width:1280,height:720};
+ const worldFlat=screenToCanvasWorld(640,360,view,vp,0);
+ const worldWarpedCenter=screenToCanvasWorld(640,360,view,vp,0.75);
+ expect(worldWarpedCenter.worldX).toBeCloseTo(worldFlat.worldX,4);
+ expect(worldWarpedCenter.worldY).toBeCloseTo(worldFlat.worldY,4);
+
+ const containWide=computeTileUvTransform(1600,400,320,180,'contain');
+ expect(containWide.scaleX).toBe(1);
+ expect(containWide.scaleY).toBeGreaterThan(1);
+
+ const coverShort=computeTileUvTransform(800,1200,320,180,'cover-top',0);
+ expect(coverShort.scrollable).toBe(false);
+ expect(coverShort.offsetY).toBeGreaterThan(0);
+
+ const coverTwoXTop=computeTileUvTransform(800,1600,320,180,'cover-top',0);
+ const coverTwoXBottom=computeTileUvTransform(800,1600,320,180,'cover-top',1);
+ expect(coverTwoXTop.offsetY).toBe(0);
+ expect(coverTwoXBottom.offsetY).toBeGreaterThan(0);
+ expect(coverTwoXTop.scrollable).toBe(true);
+});
+
+
+test('Discover filters combine color, source, visit status and unknown years',async()=>{
+ const {filterDiscoverSites,getDiscoverFilterOptions}=await import('./src/logic');
+ const sites=[
+  {title:'Studio',url:'https://studio.test',tags:['design agencies'],colors:['#f00000'],sources:[{name:'Gallery',url:'https://gallery.test',date:'2024-05-01'}]},
+  {title:'Other',url:'https://other.test',tags:['design agencies'],colors:['#0000f0'],sources:[{name:'Gallery',url:'https://gallery.test',date:null}]}
+ ];
+ const base={query:'',colors:[],years:[],sources:[],industries:[],tags:[],statuses:[],visited:{'https://studio.test':true},paletteSwatches:[{name:'Red',value:'#ff0000'},{name:'Blue',value:'#0000ff'}]};
+ expect(filterDiscoverSites(sites,{...base,colors:['Red'],sources:['Gallery'],statuses:['Visited']}).map(s=>s.title)).toEqual(['Studio']);
+ expect(filterDiscoverSites(sites,{...base,years:['Unknown'],statuses:['Unvisited']}).map(s=>s.title)).toEqual(['Other']);
+ expect(getDiscoverFilterOptions(sites).hasUnknownYear).toBe(true);
+});
+
+test('capturedFontAssetFields preserves static and variable capture metadata and falls back for legacy captures',()=>{
+ expect(capturedFontAssetFields({
+  name:'Inter 700 Italic',
+  file:'abc.woff2',
+  family:'Inter',
+  weight:700,
+  style:'italic',
+  fontSource:'capture',
+ })).toEqual({
+  family:'Inter',
+  weight:700,
+  weightMin:700,
+  weightMax:700,
+  isVariable:false,
+  style:'italic',
+  fontSource:'capture',
+ });
+
+ expect(capturedFontAssetFields({
+  name:'Plus Jakarta Sans 200-800',
+  file:'pjs.woff2',
+  family:'Plus Jakarta Sans',
+  weightMin:200,
+  weightMax:800,
+  isVariable:true,
+  style:'normal',
+ })).toEqual({
+  family:'Plus Jakarta Sans',
+  weight:400,
+  weightMin:200,
+  weightMax:800,
+  isVariable:true,
+  style:'normal',
+  fontSource:'capture',
+ });
+
+ expect(capturedFontAssetFields({
+  name:'Plus Jakarta Sans 500-800',
+  file:'pjs-heavy.woff2',
+  family:'Plus Jakarta Sans',
+  weightMin:500,
+  weightMax:800,
+ })).toEqual({
+  family:'Plus Jakarta Sans',
+  weight:500,
+  weightMin:500,
+  weightMax:800,
+  isVariable:true,
+  style:'normal',
+  fontSource:'capture',
+ });
+
+ expect(capturedFontAssetFields({
+  name:'Satoshi-SemiBoldItalic.woff2',
+  file:'Satoshi-SemiBoldItalic.woff2',
+ })).toEqual({
+  family:'Satoshi',
+  weight:600,
+  weightMin:600,
+  weightMax:600,
+  isVariable:false,
+  style:'italic',
+  fontSource:'capture',
+ });
+
+ // Invalid weights, fractional weights, invalid fontSource, and out-of-range nominal weight
+ expect(capturedFontAssetFields({
+  name:'Broken-Bold.woff2',
+  file:'Broken-Bold.woff2',
+  family:'Broken',
+  weight:0,
+  weightMin:-10,
+  weightMax:1500,
+  fontSource:'https://evil.test' as any,
+ })).toEqual({
+  family:'Broken',
+  weight:700,
+  weightMin:700,
+  weightMax:700,
+  isVariable:false,
+  style:'normal',
+  fontSource:'capture',
+ });
+
+ expect(capturedFontAssetFields({
+  name:'Fractional.woff2',
+  file:'Fractional.woff2',
+  family:'Fractional',
+  weight:450.6,
+  weightMin:199.4,
+  weightMax:800.2,
+  fontSource:'google',
+ })).toEqual({
+  family:'Fractional',
+  weight:451,
+  weightMin:199,
+  weightMax:800,
+  isVariable:true,
+  style:'normal',
+  fontSource:'google',
+ });
+
+ expect(capturedFontAssetFields({
+  name:'NarrowVar.woff2',
+  file:'NarrowVar.woff2',
+  family:'NarrowVar',
+  weight:100,
+  weightMin:500,
+  weightMax:800,
+ })).toEqual({
+  family:'NarrowVar',
+  weight:500,
+  weightMin:500,
+  weightMax:800,
+  isVariable:true,
+  style:'normal',
+  fontSource:'capture',
+ });
+});
+
+test('getFontFaceWeightDescriptor and getAvailableFontWeightPills only expose supported static or bounded variable weights',()=>{
+ expect(getFontFaceWeightDescriptor({weight:600})).toBe('600');
+ expect(getFontFaceWeightDescriptor({weight:400,weightMin:300,weightMax:700,isVariable:true})).toBe('300 700');
+ expect(getFontFaceWeightDescriptor({weight:400,weightMin:800,weightMax:200,isVariable:true})).toBe('200 800');
+ expect(getFontFaceWeightDescriptor({weight:500,weightMin:500,weightMax:500,isVariable:false})).toBe('500');
+ expect(getFontFaceWeightDescriptor({weight:0})).toBe('400');
+
+ const singleStatic=groupFontAssets([
+  {sourceId:'s1',asset:{id:'f1',name:'Editorial 400',file:'Editorial/reg.woff2',family:'Editorial',weight:400,weightMin:400,weightMax:400,isVariable:false,style:'normal'}},
+ ]);
+ expect(getAvailableFontWeightPills(singleStatic[0].variants).map(p=>p.key)).toEqual(['400-normal']);
+
+ const multiStatic=groupFontAssets([
+  {sourceId:'s1',asset:{id:'f1',name:'Satoshi 700 Italic',file:'Satoshi/700i.woff2',family:'Satoshi',weight:700,style:'italic'}},
+  {sourceId:'s1',asset:{id:'f2',name:'Satoshi 400',file:'Satoshi/400.woff2',family:'Satoshi',weight:400,style:'normal'}},
+  {sourceId:'s1',asset:{id:'f3',name:'Satoshi 700',file:'Satoshi/700.woff2',family:'Satoshi',weight:700,style:'normal'}},
+ ]);
+ expect(getAvailableFontWeightPills(multiStatic[0].variants).map(p=>({key:p.key,assetId:p.asset.id,isVariable:p.isVariable}))).toEqual([
+  {key:'400-normal',assetId:'f2',isVariable:false},
+  {key:'700-normal',assetId:'f3',isVariable:false},
+  {key:'700-italic',assetId:'f1',isVariable:false},
+ ]);
+
+ const boundedVariable=groupFontAssets([
+  {sourceId:'s1',asset:{id:'v1',name:'Inter 250-700',file:'Inter/var.woff2',family:'Inter',weight:400,weightMin:250,weightMax:700,isVariable:true,style:'normal'}},
+  {sourceId:'s1',asset:{id:'v2',name:'Inter 700 Italic',file:'Inter/700i.woff2',family:'Inter',weight:700,style:'italic'}},
+ ]);
+ expect(boundedVariable[0].primaryAsset.id).toBe('v1');
+ expect(getAvailableFontWeightPills(boundedVariable[0].variants).map(p=>p.key)).toEqual([
+  '250-normal',
+  '300-normal',
+  '400-normal',
+  '500-normal',
+  '600-normal',
+  '700-normal',
+  '700-italic',
+ ]);
+
+ // Full 100..1000 variable range includes 1000, and custom endpoints/nominal weights are exposed
+ const fullRange=groupFontAssets([
+  {sourceId:'s1',asset:{id:'full',name:'FullVar',file:'Full/var.woff2',family:'FullVar',weight:425,weightMin:50,weightMax:1000,isVariable:true,style:'normal'}},
+ ]);
+ expect(getAvailableFontWeightPills(fullRange[0].variants).map(p=>p.weight)).toEqual([50,100,200,300,400,425,500,600,700,800,900,1000]);
+
+ // Dedicated static file and narrower variable range beat wider variable file regardless of order
+ const mixed=groupFontAssets([
+  {sourceId:'s1',asset:{id:'wide-var',name:'Mix 100-900',file:'Mix/wide.woff2',family:'Mix',weight:400,weightMin:100,weightMax:900,isVariable:true,style:'normal'}},
+  {sourceId:'s1',asset:{id:'narrow-var',name:'Mix 300-500',file:'Mix/narrow.woff2',family:'Mix',weight:400,weightMin:300,weightMax:500,isVariable:true,style:'normal'}},
+  {sourceId:'s1',asset:{id:'static-400',name:'Mix 400',file:'Mix/400.woff2',family:'Mix',weight:400,weightMin:400,weightMax:400,isVariable:false,style:'normal'}},
+ ]);
+ expect(mixed[0].primaryAsset.id).toBe('static-400');
+ const mixedPills=new Map(getAvailableFontWeightPills(mixed[0].variants).map(p=>[p.key,p]));
+ expect(mixedPills.get('400-normal')?.asset.id).toBe('static-400');
+ expect(mixedPills.get('400-normal')?.isVariable).toBe(false);
+ expect(mixedPills.get('500-normal')?.asset.id).toBe('narrow-var');
+ expect(mixedPills.get('800-normal')?.asset.id).toBe('wide-var');
+});
+
+test('trash timestamp parsing and 30-day expiration handle boundaries, timezones, and invalid dates safely',async()=>{
+  const {
+    TRASH_RETENTION_DAYS,
+    TRASH_RETENTION_MS,
+    parseTrashTimestamp,
+    isTrashExpired,
+    trashDaysRemaining,
+  }=await import('./src/logic');
+
+  const t0=parseTrashTimestamp('2026-10-01T12:00:00.000Z');
+  expect(t0).not.toBeNull();
+  expect(parseTrashTimestamp('2026-10-01T15:00:00+03:00')).toBe(t0);
+  expect(parseTrashTimestamp('2026-10-01T07:00:00-05:00')).toBe(t0);
+  expect(parseTrashTimestamp('2026-10-01')).toBe(Date.UTC(2026,9,1,0,0,0,0));
+
+  expect(parseTrashTimestamp('2024-02-29T00:00:00Z')).not.toBeNull();
+  expect(parseTrashTimestamp('2025-02-29T00:00:00Z')).toBeNull();
+  expect(parseTrashTimestamp('2026-04-31T00:00:00Z')).toBeNull();
+  expect(parseTrashTimestamp('not-a-date')).toBeNull();
+  expect(parseTrashTimestamp('')).toBeNull();
+
+  expect(isTrashExpired('2026-10-01T12:00:00Z',(t0 as number)+TRASH_RETENTION_MS-1)).toBe(false);
+  expect(isTrashExpired('2026-10-01T12:00:00Z',(t0 as number)+TRASH_RETENTION_MS)).toBe(true);
+  expect(isTrashExpired('2026-10-10T12:00:00Z',t0 as number)).toBe(false);
+  expect(isTrashExpired('2025-02-29T00:00:00Z',(t0 as number)+TRASH_RETENTION_MS*10)).toBe(false);
+
+  expect(trashDaysRemaining('2026-10-01T12:00:00Z',t0 as number)).toBe(TRASH_RETENTION_DAYS);
+  expect(trashDaysRemaining('2026-10-01T12:00:00Z',(t0 as number)+TRASH_RETENTION_MS-60_000)).toBe(1);
+  expect(trashDaysRemaining('2026-10-01T12:00:00Z',(t0 as number)+TRASH_RETENTION_MS)).toBe(0);
+  expect(trashDaysRemaining('bad-date',t0 as number)).toBeNull();
+});
+
+test('pure trash deletion, clear, and 30-day purge preserve active items and clear stale covers',async()=>{
+  const {removeTrashedItem,clearAllTrash,purgeExpiredTrash}=await import('./src/logic');
+  const library=[
+    {
+      id:'s-active',
+      coverId:'a-trashed',
+      assets:[
+        {id:'a-keep',file:'Active/keep.webp'},
+        {id:'a-trashed',file:'Active/old.webp',trashedAt:'2026-10-01T00:00:00Z'},
+        {id:'a-recent',file:'Active/recent.webp',trashedAt:'2026-11-10T00:00:00Z'},
+      ],
+    },
+    {
+      id:'s-trashed-old',
+      trashedAt:'2026-10-05T00:00:00Z',
+      assets:[{id:'old-1',file:'Old/1.webp'}],
+    },
+    {
+      id:'s-trashed-fresh',
+      trashedAt:'2026-11-12T00:00:00Z',
+      assets:[{id:'fresh-1',file:'Fresh/1.webp'}],
+    },
+  ];
+
+  // Refuses active source/asset removal
+  expect(removeTrashedItem(library,'s-active')).toEqual(library);
+  expect(removeTrashedItem(library,'s-active','a-keep')).toEqual(library);
+
+  // Removes trashed asset and clears matching coverId
+  const afterSingle=removeTrashedItem(library,'s-active','a-trashed');
+  expect(afterSingle[0].assets.map(a=>a.id)).toEqual(['a-keep','a-recent']);
+  expect(afterSingle[0].coverId).toBeUndefined();
+
+  // 30-day purge removes expired source & asset while preserving recent trash
+  const now=Date.UTC(2026,10,17,0,0,0,0);
+  const purged=purgeExpiredTrash(library,now);
+  expect(purged.removedSources).toBe(1);
+  expect(purged.removedAssets).toBe(2);
+  expect(purged.sources.map(s=>s.id)).toEqual(['s-active','s-trashed-fresh']);
+  expect(purged.sources[0].assets.map(a=>a.id)).toEqual(['a-keep','a-recent']);
+  expect(purged.sources[0].coverId).toBeUndefined();
+
+  // Clear all removes remaining trashed source & trashed asset
+  const cleared=clearAllTrash(library);
+  expect(cleared.map(s=>s.id)).toEqual(['s-active']);
+  expect(cleared[0].assets.map(a=>a.id)).toEqual(['a-keep']);
+  expect(cleared[0].coverId).toBeUndefined();
+});
+
+test('trash storage path detection respects shared references across active and trashed entries',async()=>{
+  const {isFileInTrashStorage,isThumbnailInTrashStorage,isPreviewInTrashStorage}=await import('./src/logic');
+  const sources=[
+    {
+      trashedAt:'2026-11-10T00:00:00Z',
+      assets:[
+        {file:'Shared/inter.woff2'},
+        {file:'Trashed/clip.mp4',thumbnail:'clip-t1500.jpg',previewVideo:'clip.v2.mp4'},
+      ],
+    },
+    {
+      assets:[
+        {file:'Shared\\inter.woff2'},
+        {file:'Active/keep.mp4',thumbnail:'keep.jpg',previewVideo:'keep.v2.mp4'},
+        {file:'Active/removed.webp',thumbnail:'removed.jpg',trashedAt:'2026-11-11T00:00:00Z'},
+      ],
+    },
+  ];
+
+  expect(isFileInTrashStorage(sources,'Shared/inter.woff2')).toBe(false);
+  expect(isFileInTrashStorage(sources,'Trashed/clip.mp4')).toBe(true);
+  expect(isFileInTrashStorage(sources,'Active/removed.webp')).toBe(true);
+  expect(isFileInTrashStorage(sources,'Active/keep.mp4')).toBe(false);
+
+  expect(isThumbnailInTrashStorage(sources,'clip-t1500.jpg','Trashed/clip.mp4')).toBe(true);
+  expect(isThumbnailInTrashStorage(sources,'clip.jpg','Trashed/clip.mp4')).toBe(true);
+  expect(isThumbnailInTrashStorage(sources,'removed.jpg','Active/removed.webp')).toBe(true);
+  expect(isThumbnailInTrashStorage(sources,'keep.jpg','Active/keep.mp4')).toBe(false);
+
+  expect(isPreviewInTrashStorage(sources,'clip.v2.mp4','Trashed/clip.mp4')).toBe(true);
+  expect(isPreviewInTrashStorage(sources,'keep.v2.mp4','Active/keep.mp4')).toBe(false);
+});
+
+test('trashService resolves trash URLs, supports browser fallback, and flushes writes before native invoke',async()=>{
+  const {
+    trashItems,
+    restoreFromTrash,
+    permanentlyDeleteTrashed,
+    clearTrash,
+    purgeExpiredLibraryTrash,
+    resolveAssetDiskUrl,
+    resolveThumbDiskUrl,
+    resolvePreviewVideoDiskUrl,
+    revealAssetFile,
+    getAssetDiskPath,
+    copyAssetImageToClipboard,
+    formatTrashExpiryLabel,
+  }=await import('./src/lib/trashService');
+  const initial: Array<import('./src/types').Source>=[
+    {
+      id:'s1',
+      title:'Studio',
+      url:'',
+      category:'Web design',
+      tags:[],
+      notes:'',
+      coverId:'a1',
+      x:0,
+      y:0,
+      created:'2026-10-01T00:00:00Z',
+      assets:[
+        {id:'a1',name:'Clip',file:'Studio/clip.mp4',kind:'video',thumbnail:'clip.jpg',previewVideo:'clip.v2.mp4'},
+        {id:'a2',name:'Shot',file:'Studio/shot.webp',kind:'image'},
+      ],
+    },
+  ];
+
+  // Browser fallback lifecycle: trash -> resolve URL -> restore -> re-trash -> delete -> clear
+  const trashed=await trashItems([{sourceId:'s1',assetId:'a1'}],initial,{now:'2026-11-01T00:00:00.000Z'});
+  expect(trashed.result.trashedCount).toBe(1);
+  expect(trashed.sources[0].coverId).toBeUndefined();
+  expect(trashed.sources[0].assets[0].trashedAt).toBe('2026-11-01T00:00:00.000Z');
+
+  const id=(p:string)=>p;
+  expect(resolveAssetDiskUrl('C:\\Lib','Studio/clip.mp4',trashed.sources,id)).toBe('C:\\Lib\\trash\\assets\\Studio\\clip.mp4');
+  expect(resolveAssetDiskUrl('C:\\Lib','Studio/shot.webp',trashed.sources,id)).toBe('C:\\Lib\\assets\\Studio\\shot.webp');
+  expect(resolveThumbDiskUrl('C:\\Lib','clip.jpg',trashed.sources,'Studio/clip.mp4',id)).toBe('C:\\Lib\\trash\\thumbnails\\clip.jpg');
+  expect(resolvePreviewVideoDiskUrl('C:\\Lib',{file:'Studio/clip.mp4',previewVideo:'clip.v2.mp4'},trashed.sources,id)).toBe('C:\\Lib\\trash\\previews\\clip.v2.mp4');
+
+  const restored=await restoreFromTrash([{sourceId:'s1',assetId:'a1'}],trashed.sources);
+  expect(restored.result.restoredCount).toBe(1);
+  expect(restored.sources[0].assets[0].trashedAt).toBeUndefined();
+  expect(resolveAssetDiskUrl('C:\\Lib','Studio/clip.mp4',restored.sources,id)).toBe('C:\\Lib\\assets\\Studio\\clip.mp4');
+
+  const trashedOld=await trashItems([{sourceId:'s1',assetId:'a1'}],restored.sources,{now:'2026-10-01T00:00:00.000Z'});
+  const purged=await purgeExpiredLibraryTrash(trashedOld.sources,{now:'2026-11-17T00:00:00.000Z'});
+  expect(purged.result.deletedAssets).toBe(1);
+  expect(purged.sources[0].assets.map(a=>a.id)).toEqual(['a2']);
+
+  const trashedTwo=await trashItems([{sourceId:'s1'}],purged.sources,{now:'2026-11-10T00:00:00.000Z'});
+  const deleted=await permanentlyDeleteTrashed([{sourceId:'s1'}],trashedTwo.sources);
+  expect(deleted.result.deletedSources).toBe(1);
+  expect(deleted.sources).toEqual([]);
+
+  const cleared=await clearTrash(trashedTwo.sources);
+  expect(cleared.result.deletedSources).toBe(1);
+  expect(cleared.sources).toEqual([]);
+
+  // Native invoke path: flushes writes before invoking commands
+  const calls:Array<{cmd:string;args?:Record<string,unknown>}>=[];
+  let flushed=false;
+  const mockInvoke=async <R,>(cmd:string,args?:Record<string,unknown>):Promise<R>=>{
+    calls.push({cmd,args});
+    if(cmd==='get_asset_path')return 'C:\\Lib\\trash\\assets\\Studio\\clip.mp4' as R;
+    if(cmd==='reveal_asset_file'||cmd==='copy_image_to_clipboard')return undefined as R;
+    return {
+      library:JSON.stringify(trashed.sources),
+      trashedCount:1,
+      restoredCount:0,
+      deletedSources:0,
+      deletedAssets:0,
+      deletedFiles:0,
+      movedToTrash:1,
+      restoredFromTrash:0,
+      warnings:[],
+    } as R;
+  };
+  const nativeRes=await trashItems([{sourceId:'s1',assetId:'a1'}],initial,{
+    now:'2026-11-01T00:00:00.000Z',
+    flushPendingWrites:async()=>{flushed=true;return true},
+    invokeFn:mockInvoke,
+  });
+  expect(flushed).toBe(true);
+  expect(nativeRes.result.movedToTrash).toBe(1);
+  expect(calls[0]).toEqual({
+    cmd:'trash_items',
+    args:{targets:[{sourceId:'s1',assetId:'a1'}],nowIso:'2026-11-01T00:00:00.000Z'},
+  });
+
+  await expect(clearTrash(initial,{
+    flushPendingWrites:async()=>false,
+    invokeFn:mockInvoke,
+  })).rejects.toThrow('flush pending library changes');
+
+  await revealAssetFile('Studio/clip.mp4',true,{invokeFn:mockInvoke});
+  expect(await getAssetDiskPath('Studio/clip.mp4',true,{invokeFn:mockInvoke})).toBe('C:\\Lib\\trash\\assets\\Studio\\clip.mp4');
+  await copyAssetImageToClipboard({file:'Studio/shot.webp',trashed:true},{invokeFn:mockInvoke});
+  expect(calls.slice(-3)).toEqual([
+    {cmd:'reveal_asset_file',args:{file:'Studio/clip.mp4',trashed:true}},
+    {cmd:'get_asset_path',args:{file:'Studio/clip.mp4',trashed:true}},
+    {cmd:'copy_image_to_clipboard',args:{file:'Studio/shot.webp',pngBytes:null,trashed:true}},
+  ]);
+
+  const tBase=Date.UTC(2026,10,1,0,0,0,0);
+  expect(formatTrashExpiryLabel('2026-11-01T00:00:00Z',tBase)).toBe('30 days left');
+  expect(formatTrashExpiryLabel('2026-11-01T00:00:00Z',tBase+29*86_400_000+1_000)).toBe('1 day left');
+  expect(formatTrashExpiryLabel('2026-11-01T00:00:00Z',tBase+30*86_400_000)).toBe('Expires today');
 });

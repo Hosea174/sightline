@@ -10,6 +10,16 @@ use std::{
 };
 use tauri::Manager;
 mod drive_backup;
+mod media_cache;
+mod trash;
+mod video_editor;
+
+fn library_io_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 fn library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let path = fs::read_to_string(config.join("library-path.txt"))
@@ -55,8 +65,7 @@ async fn fetch_favicon(app: tauri::AppHandle, source_id: String, source_url: Str
         uuid::Uuid::parse_str(&source_id).map_err(|_| "Invalid source ID")?;
         let url = url::Url::parse(&source_url).map_err(|_| "Invalid source URL")?;
         if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() { return Err("Unsupported URL".to_string()); }
-        let dir = library_path(&app)?.join("favicons"); fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let temp = dir.join(format!("{}.part", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("sightline-fav-{}.part", uuid::Uuid::new_v4()));
         let mut cmd = Command::new("python");
         #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
         let output = cmd.args(["-c", include_str!("../../scripts/fetch-favicon.py"), url.as_str()]).arg(&temp).output();
@@ -66,7 +75,16 @@ async fn fetch_favicon(app: tauri::AppHandle, source_id: String, source_url: Str
             let bytes = fs::read(&temp).map_err(|e| e.to_string())?;
             if bytes.len()>1048576 { return Err("Favicon too large".to_string()); }
             let ext=if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {"png"} else if bytes.starts_with(b"\0\0\x01\0") {"ico"} else if bytes.starts_with(b"\xff\xd8\xff") {"jpg"} else if bytes.starts_with(b"GIF8") {"gif"} else if bytes.starts_with(b"RIFF") && bytes.get(8..12)==Some(b"WEBP") {"webp"} else {return Err("Unsupported favicon".to_string())};
-            let name=format!("{}.{ext}", uuid::Uuid::new_v4()); fs::rename(&temp,dir.join(&name)).map_err(|e|e.to_string())?; Ok(name)
+            let _lock = library_io_lock();
+            let root = library_path(&app)?;
+            let dir = trash::ensure_safe_dir_under(&root, &["favicons"])?;
+            let name=format!("{}.{ext}", uuid::Uuid::new_v4());
+            let dest = dir.join(&name);
+            trash::check_not_symlink(&dest)?;
+            if fs::rename(&temp, &dest).is_err() {
+                fs::copy(&temp, &dest).map_err(|e| e.to_string())?;
+            }
+            Ok(name)
         })(); let _=fs::remove_file(temp); result
     }).await.map_err(|e| e.to_string())?
 }
@@ -91,7 +109,6 @@ fn discover_images_dir(app: tauri::AppHandle) -> Result<String, String> {
 fn load_discover_catalog(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let path = catalog_path(&app)?;
     if !path.exists() { return Ok(None); }
-    cache_discover_images(&path)?;
     let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let value: serde_json::Value = serde_json::from_str(&data).map_err(|e| format!("Discover catalog is invalid: {e}"))?;
     if !value.is_array() { return Err("Discover catalog must be an array".into()); }
@@ -127,8 +144,7 @@ fn initialize_discover_catalog(app: tauri::AppHandle, data: String) -> Result<()
         }
     })();
     let _ = fs::remove_file(temp);
-    result?;
-    cache_discover_images(&path)
+    result
 }
 fn run_discover_refresh(path: &Path) -> Result<String, String> {
     if !path.exists() { return Err("Open Discover once before refreshing".into()); }
@@ -137,7 +153,7 @@ fn run_discover_refresh(path: &Path) -> Result<String, String> {
     let output = cmd.args(["-c", include_str!("../../scripts/refresh-discover.py")]).arg(path).env("SIGHTLINE_CSS_COLLECTOR", include_str!("../../scripts/discover-css-awards.py")).output()
         .map_err(|e| format!("Could not start Python: {e}"))?;
     if !output.status.success() { return Err(format!("Refresh failed: {}", String::from_utf8_lossy(&output.stderr))); }
-    cache_discover_images(path)?;
+    let _ = cache_discover_images(path);
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 #[tauri::command]
@@ -203,8 +219,7 @@ fn lock_discover(app: &tauri::AppHandle) -> Result<fs::File, String> {
 fn add_discover_site(app: tauri::AppHandle, title: String, url: String, image: String, tags: Vec<String>) -> Result<(), String> {
     let _lock = lock_discover(&app)?;
     let path = catalog_path(&app)?;
-    add_discover_site_at(&path, title, url, image, tags)?;
-    cache_discover_images(&path)
+    add_discover_site_at(&path, title, url, image, tags)
 }
 fn add_discover_site_at(path: &Path, title: String, url: String, image: String, tags: Vec<String>) -> Result<(), String> {
     let title = title.trim();
@@ -256,6 +271,7 @@ async fn backup_to_drive(app: tauri::AppHandle, folder: String, ui_state: String
                 Err(e) => return Err(e.to_string()),
             }
         }
+        let _lib_lock = library_io_lock();
         let _lock = lock_discover(&app)?;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -287,6 +303,7 @@ struct RestoreResult { library_path: String, ui_state: String }
 #[tauri::command]
 async fn restore_drive_backup(app: tauri::AppHandle, snapshot: String, target: String) -> Result<RestoreResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _lib_lock = library_io_lock();
         let _lock = lock_discover(&app)?;
         let instagram_dir=app.path().app_data_dir().map_err(|e|e.to_string())?;
         let _instagram_lock=lock_instagram(&instagram_dir)?;
@@ -317,8 +334,9 @@ async fn restore_drive_backup(app: tauri::AppHandle, snapshot: String, target: S
         if !restored_palettes.is_empty() {
             replace_restored_file(&dir, "discover-restored-colors.json", &serde_json::to_vec(&restored_palettes).map_err(|e| e.to_string())?)?;
         }
-        set_library(app, library.to_string_lossy().to_string())?;
-        Ok(RestoreResult { library_path: library.to_string_lossy().to_string(), ui_state: state })
+        let lib_str = library.to_string_lossy().to_string();
+        set_library_impl(&app, &lib_str)?;
+        Ok(RestoreResult { library_path: lib_str, ui_state: state })
     }).await.map_err(|e| e.to_string())?
 }
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -392,22 +410,40 @@ fn acknowledge_instagram_posts(app: tauri::AppHandle, keys: Vec<String>) -> Resu
 fn get_library(app: tauri::AppHandle) -> Result<String, String> {
     Ok(library_path(&app)?.to_string_lossy().to_string())
 }
-#[tauri::command]
-fn set_library(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let root = Path::new(&path);
+fn set_library_impl(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
+    let root = Path::new(path);
+    trash::check_not_symlink(root)?;
     let index = root.join("library.json");
-    if index.exists() {
-        let content = fs::read_to_string(&index).map_err(|e| e.to_string())?;
-        let value: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| format!("Library index is invalid: {e}"))?;
-        if !value.is_array() {
-            return Err("Library index must be an array".into());
+    trash::check_not_symlink(&index)?;
+    match fs::symlink_metadata(&index) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                return Err("Library index is not a regular file".into());
+            }
+            let content = fs::read_to_string(&index).map_err(|e| e.to_string())?;
+            let value: serde_json::Value =
+                serde_json::from_str(&content).map_err(|e| format!("Library index is invalid: {e}"))?;
+            if !value.is_array() {
+                return Err("Library index must be an array".into());
+            }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
-    fs::create_dir_all(root.join("assets")).map_err(|e| e.to_string())?;
+    if root.exists() {
+        trash::check_library_dirs_safe(root)?;
+        trash::ensure_safe_dir_under(root, &["assets"])?;
+    } else {
+        fs::create_dir_all(root.join("assets")).map_err(|e| e.to_string())?;
+    }
     let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&config).map_err(|e| e.to_string())?;
     fs::write(config.join("library-path.txt"), path).map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn set_library(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let _lock = library_io_lock();
+    set_library_impl(&app, &path)
 }
 fn sanitize_folder_name(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -453,33 +489,9 @@ fn asset_folder_prefix(file: &str) -> Option<String> {
     Some(folder.to_string())
 }
 fn safe_asset_path(root: &Path, rel: &str) -> Result<(PathBuf, String), String> {
-    if rel.is_empty() {
-        return Err("Invalid asset path".into());
-    }
-    let normalized = rel.replace('\\', "/");
-    let rel_path = Path::new(&normalized);
-    let mut parts = Vec::new();
-    for comp in rel_path.components() {
-        match comp {
-            std::path::Component::Normal(seg) => {
-                let s = seg.to_str().ok_or_else(|| "Invalid asset path".to_string())?;
-                if s.is_empty() || s == "." || s == ".." {
-                    return Err("Invalid asset path".into());
-                }
-                parts.push(s);
-            }
-            _ => return Err("Invalid asset path".into()),
-        }
-    }
-    if parts.is_empty() || parts.len() > 2 {
-        return Err("Invalid asset path".into());
-    }
-    let full = if parts.len() == 2 {
-        root.join("assets").join(parts[0]).join(parts[1])
-    } else {
-        root.join("assets").join(parts[0])
-    };
-    Ok((full, parts.join("/")))
+    let (full, clean) = trash::safe_subpath(&root.join("assets"), rel)?;
+    trash::check_subpath_not_symlink_under(root, "assets", &clean)?;
+    Ok((full, clean))
 }
 fn clean_url_host(raw: &str) -> String {
     url::Url::parse(raw)
@@ -523,32 +535,116 @@ fn unique_folder_name(
         n += 1;
     }
 }
-fn write_library_index_at(root: &Path, data: &str) -> Result<(), String> {
-    let tmp = root.join("library.tmp");
-    let index = root.join("library.json");
-    let mut file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    file.write_all(data.as_bytes())
-        .and_then(|_| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    if index.exists() {
-        let backup_tmp = root.join("library.backup.tmp");
-        fs::copy(&index, &backup_tmp).map_err(|e| e.to_string())?;
-        fs::rename(backup_tmp, root.join("library.backup.json")).map_err(|e| e.to_string())?;
+fn rename_index_with_retry(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
+    let mut last_err = None;
+    for attempt in 0..4 {
+        match fs::rename(src, dest) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                #[cfg(target_os = "windows")]
+                let sharing_violation = e.raw_os_error() == Some(32);
+                #[cfg(not(target_os = "windows"))]
+                let sharing_violation = false;
+                if sharing_violation && attempt < 3 {
+                    last_err = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
     }
-    fs::rename(tmp, index).map_err(|e| e.to_string())
+    Err(last_err.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Could not rename index file")))
+}
+pub(crate) fn write_library_index_at(root: &Path, data: &str) -> Result<(), String> {
+    trash::check_not_symlink(root)?;
+    match fs::symlink_metadata(root) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(format!("Library root is not a directory: {}", root.display())),
+        Err(e) => return Err(e.to_string()),
+    }
+    let index = root.join("library.json");
+    let backup = root.join("library.backup.json");
+    trash::check_not_symlink(&index)?;
+    trash::check_not_symlink(&backup)?;
+
+    let tmp = root.join(format!("library-{}.tmp", uuid::Uuid::new_v4()));
+    let write_tmp = (|| -> Result<(), String> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        file.write_all(data.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        drop(file);
+        Ok(())
+    })();
+    if let Err(e) = write_tmp {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    match fs::symlink_metadata(&index) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                let _ = fs::remove_file(&tmp);
+                return Err("library.json is not a regular file".into());
+            }
+            let backup_tmp = root.join(format!("library.backup-{}.tmp", uuid::Uuid::new_v4()));
+            let backup_res = (|| -> Result<(), String> {
+                let mut reader = fs::File::open(&index).map_err(|e| e.to_string())?;
+                let mut writer = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&backup_tmp)
+                    .map_err(|e| e.to_string())?;
+                std::io::copy(&mut reader, &mut writer).map_err(|e| e.to_string())?;
+                writer.sync_all().map_err(|e| e.to_string())?;
+                drop(writer);
+                drop(reader);
+                rename_index_with_retry(&backup_tmp, &backup).map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Err(e) = backup_res {
+                let _ = fs::remove_file(&backup_tmp);
+                let _ = fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.to_string());
+        }
+    }
+
+    if let Err(e) = rename_index_with_retry(&tmp, &index) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 fn organize_library_assets_at(root: &Path) -> Result<(), String> {
+    trash::check_library_dirs_safe(root)?;
     let index = root.join("library.json");
-    if !index.exists() {
-        return Ok(());
+    trash::check_not_symlink(&index)?;
+    match fs::symlink_metadata(&index) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                return Err("library.json is not a regular file".into());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
     }
     let raw = fs::read_to_string(&index).map_err(|e| e.to_string())?;
     let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let Some(sources) = value.as_array_mut() else {
-        return Ok(());
+        return Err("Library index must be an array".into());
     };
-    let assets_dir = root.join("assets");
-    fs::create_dir_all(&assets_dir).map_err(|e| e.to_string())?;
+    let assets_dir = trash::ensure_safe_dir_under(root, &["assets"])?;
     let mut used_lower = std::collections::HashSet::<String>::new();
     for source in sources.iter() {
         if let Some(f) = source["folder"].as_str().filter(|f| !f.trim().is_empty()) {
@@ -595,31 +691,45 @@ fn organize_library_assets_at(root: &Path) -> Result<(), String> {
         let Some(assets) = source["assets"].as_array() else { continue; };
         for asset in assets {
             let Some(file) = asset["file"].as_str() else { continue; };
-            let norm = file.replace('\\', "/");
+            let Ok(norm) = trash::clean_rel_subpath(file) else {
+                continue;
+            };
             if norm.contains('/') || moved_map.contains_key(&norm) {
                 continue;
             }
             let src_path = assets_dir.join(&norm);
-            if !src_path.is_file() {
-                continue;
+            match fs::symlink_metadata(&src_path) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        return Err(format!("Refusing symlink asset path: {}", src_path.display()));
+                    }
+                    if !meta.is_file() {
+                        continue;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.to_string()),
             }
-            let dest_dir = assets_dir.join(folder);
-            if fs::create_dir_all(&dest_dir).is_err() {
-                continue;
-            }
+            let dest_dir = trash::ensure_safe_dir_under(root, &["assets", folder])?;
             let dest_path = dest_dir.join(&norm);
-            let moved_ok = if dest_path.is_file() {
-                true
-            } else if fs::rename(&src_path, &dest_path).is_ok() {
-                true
-            } else if fs::copy(&src_path, &dest_path).is_ok() {
-                let _ = fs::remove_file(&src_path);
-                true
-            } else {
-                false
+            trash::check_not_symlink(&dest_path)?;
+            let moved_ok = match fs::symlink_metadata(&dest_path) {
+                Ok(meta) if meta.is_file() => true,
+                Ok(_) => return Err(format!("Destination is not a file: {}", dest_path.display())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if rename_index_with_retry(&src_path, &dest_path).is_ok() {
+                        true
+                    } else if fs::copy(&src_path, &dest_path).is_ok() {
+                        fs::remove_file(&src_path).map_err(|e| e.to_string())?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
             };
             if moved_ok {
-                moved_map.insert(norm, format!("{folder}/{file}"));
+                moved_map.insert(norm.clone(), format!("{folder}/{norm}"));
             }
         }
     }
@@ -645,6 +755,77 @@ fn organize_library_assets_at(root: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+fn rename_source_folder_at(
+    root: &Path,
+    old_folder: &str,
+    new_title: &str,
+    url: &str,
+    source_id: &str,
+    used_folders: Vec<String>,
+) -> Result<String, String> {
+    trash::check_library_dirs_safe(root)?;
+    let clean_old = sanitize_folder_name(old_folder);
+    trash::safe_single_name(&clean_old)?;
+    let used_lower: std::collections::HashSet<String> = used_folders
+        .into_iter()
+        .map(|f| sanitize_folder_name(&f).to_ascii_lowercase())
+        .collect();
+    let new_folder = unique_folder_name(new_title, url, source_id, &used_lower);
+    trash::safe_single_name(&new_folder)?;
+    if clean_old == new_folder {
+        return Ok(new_folder);
+    }
+    trash::check_ancestors_under_root(root, &["assets", &clean_old])?;
+    trash::check_ancestors_under_root(root, &["assets", &new_folder])?;
+    trash::check_trash_folder_rename_ready(root, &clean_old, &new_folder)?;
+
+    let assets_dir = root.join("assets");
+    let old_path = assets_dir.join(&clean_old);
+    let new_path = assets_dir.join(&new_folder);
+    let mut renamed_assets = false;
+
+    match fs::symlink_metadata(&old_path) {
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return Err(format!("Refusing symlink/junction folder: {}", old_path.display()));
+            }
+            if !meta.is_dir() {
+                return Err(format!("Expected directory at {}", old_path.display()));
+            }
+            match fs::symlink_metadata(&new_path) {
+                Ok(dest_meta) => {
+                    if dest_meta.file_type().is_symlink() {
+                        return Err(format!("Refusing symlink/junction folder: {}", new_path.display()));
+                    }
+                    #[cfg(target_os = "windows")]
+                    let same_ci = clean_old.eq_ignore_ascii_case(&new_folder);
+                    #[cfg(not(target_os = "windows"))]
+                    let same_ci = clean_old == new_folder;
+                    if !same_ci {
+                        return Err("Target source folder already exists".into());
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            rename_index_with_retry(&old_path, &new_path)
+                .map_err(|e| format!("Could not rename source folder: {e}"))?;
+            renamed_assets = true;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+
+    if let Err(e) = trash::rename_trash_folder_at(root, &clean_old, &new_folder) {
+        if renamed_assets {
+            if let Err(rb_err) = rename_index_with_retry(&new_path, &old_path) {
+                return Err(format!("{e}; additionally rollback of assets folder failed: {rb_err}"));
+            }
+        }
+        return Err(e);
+    }
+    Ok(new_folder)
+}
 #[tauri::command]
 fn rename_source_folder(
     app: tauri::AppHandle,
@@ -654,49 +835,87 @@ fn rename_source_folder(
     source_id: String,
     used_folders: Vec<String>,
 ) -> Result<String, String> {
+    let _lock = library_io_lock();
     let root = library_path(&app)?;
-    let assets_dir = root.join("assets");
-    let clean_old = sanitize_folder_name(&old_folder);
-    let used_lower: std::collections::HashSet<String> = used_folders
-        .into_iter()
-        .map(|f| sanitize_folder_name(&f).to_ascii_lowercase())
-        .collect();
-    let new_folder = unique_folder_name(&new_title, &url, &source_id, &used_lower);
-    if clean_old == new_folder {
-        return Ok(new_folder);
-    }
-    let old_path = assets_dir.join(&clean_old);
-    if !old_path.exists() {
-        return Ok(new_folder);
-    }
-    let new_path = assets_dir.join(&new_folder);
-    if new_path.exists() && !clean_old.eq_ignore_ascii_case(&new_folder) {
-        return Err("Target source folder already exists".into());
-    }
-    fs::rename(&old_path, &new_path).map_err(|e| format!("Could not rename source folder: {e}"))?;
-    Ok(new_folder)
+    rename_source_folder_at(&root, &old_folder, &new_title, &url, &source_id, used_folders)
 }
 #[tauri::command]
 fn load_library(app: tauri::AppHandle) -> Result<String, String> {
+    let _lock = library_io_lock();
     let root = library_path(&app)?;
-    let _ = organize_library_assets_at(&root);
+    trash::check_library_dirs_safe(&root)?;
+    organize_library_assets_at(&root)?;
     let p = root.join("library.json");
-    if !p.exists() {
-        return Ok("[]".into());
+    trash::check_not_symlink(&p)?;
+    match fs::symlink_metadata(&p) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                return Err("library.json is not a regular file".into());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok("[]".into()),
+        Err(e) => return Err(e.to_string()),
     }
-    fs::read_to_string(p).map_err(|e| e.to_string())
+    let data = fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let Some(sources) = value.as_array_mut() else {
+        return Err("Library index must be an array".into());
+    };
+    let purge = trash::purge_expired_trash_in_sources(
+        &root,
+        sources,
+        trash::current_unix_secs(),
+        trash::TRASH_RETENTION_SECS,
+    )?;
+    let purged = purge.changed;
+    trash::reconcile_trash_storage_at(&root, sources)?;
+    let palettes_cleared = clear_library_palettes(&mut value);
+    if palettes_cleared {
+        let cleaned = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        write_library_index_at(&root, &cleaned)?;
+        return Ok(cleaned);
+    }
+    if purged {
+        return serde_json::to_string(&value).map_err(|e| e.to_string());
+    }
+    Ok(data)
+}
+fn clear_library_palettes(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    if let Some(sources) = value.as_array_mut() {
+        for source in sources {
+            if let Some(assets) = source["assets"].as_array_mut() {
+                for asset in assets {
+                    if let Some(fields) = asset.as_object_mut() {
+                        changed |= fields.remove("palette").is_some();
+                        changed |= fields.remove("paletteVersion").is_some();
+                    }
+                }
+            }
+        }
+    }
+    changed
 }
 #[tauri::command]
 fn save_library(app: tauri::AppHandle, data: String) -> Result<(), String> {
-    let value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
     if !value.is_array() {
         return Err("Library index must be an array".into());
     }
+    let _lock = library_io_lock();
     let root = library_path(&app)?;
-    write_library_index_at(&root, &data)
+    trash::check_library_dirs_safe(&root)?;
+    clear_library_palettes(&mut value);
+    let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+    write_library_index_at(&root, &serialized)?;
+    if let Some(sources) = value.as_array() {
+        trash::reconcile_trash_storage_at(&root, sources)?;
+    }
+    Ok(())
 }
 fn import_asset_impl(app: tauri::AppHandle, path: String, folder: Option<String>) -> Result<String, String> {
     let root = library_path(&app)?;
+    trash::check_library_dirs_safe(&root)?;
     let source = Path::new(&path);
     let ext = source
         .extension()
@@ -719,16 +938,19 @@ fn import_asset_impl(app: tauri::AppHandle, path: String, folder: Option<String>
         .filter(|f| !f.is_empty())
         .map(sanitize_folder_name);
     let target_dir = match clean_folder {
-        Some(ref f) => root.join("assets").join(f),
-        None => root.join("assets"),
+        Some(ref f) => {
+            trash::safe_single_name(f)?;
+            trash::ensure_safe_dir_under(&root, &["assets", f])?
+        }
+        None => trash::ensure_safe_dir_under(&root, &["assets"])?,
     };
-    fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
     let rel = |file: String| match clean_folder {
         Some(ref f) => format!("{f}/{file}"),
         None => file,
     };
     let name = format!("{}.{}", id, out_ext);
     let dest = target_dir.join(&name);
+    trash::check_not_symlink(&dest)?;
     if is_image || is_video {
         let mut cmd = Command::new(ffmpeg_program());
         #[cfg(target_os = "windows")]
@@ -763,7 +985,9 @@ fn import_asset_impl(app: tauri::AppHandle, path: String, folder: Option<String>
         {
             let _ = fs::remove_file(&dest);
             let original = format!("{}.{}", id, ext);
-            fs::copy(source, target_dir.join(&original)).map_err(|e| e.to_string())?;
+            let orig_dest = target_dir.join(&original);
+            trash::check_not_symlink(&orig_dest)?;
+            fs::copy(source, orig_dest).map_err(|e| e.to_string())?;
             return Ok(rel(original));
         }
     } else {
@@ -773,7 +997,10 @@ fn import_asset_impl(app: tauri::AppHandle, path: String, folder: Option<String>
 }
 #[tauri::command]
 async fn import_asset(app: tauri::AppHandle, path: String, folder: Option<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || import_asset_impl(app, path, folder))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        import_asset_impl(app, path, folder)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -793,7 +1020,10 @@ async fn import_asset_bytes(app: tauri::AppHandle, name: String, bytes: Vec<u8>,
         if !["png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "webm", "mov", "mkv"].contains(&ext.as_str()) && !is_font_ext(&ext) { return Err("Unsupported file type".into()); }
         let path = std::env::temp_dir().join(format!("sightline-{}.{}", uuid::Uuid::new_v4(), ext));
         fs::write(&path, bytes).map_err(|e| e.to_string())?;
-        let result = import_asset_impl(app, path.to_string_lossy().into_owned(), folder);
+        let result = {
+            let _lock = library_io_lock();
+            import_asset_impl(app, path.to_string_lossy().into_owned(), folder)
+        };
         let _ = fs::remove_file(path);
         result
     }).await.map_err(|e| e.to_string())?
@@ -815,6 +1045,7 @@ async fn download_post_media(app: tauri::AppHandle, source_url: String, use_brav
             if !output.status.success() { return Err(if host=="instagram.com" {"Could not download Instagram media. Check your sign-in and gallery-dl setup; the link remains saved.".to_string()} else {format!("Could not download media: {}", String::from_utf8_lossy(&output.stderr).chars().take(400).collect::<String>())}); }
             fn collect(dir:&Path, out:&mut Vec<PathBuf>) -> Result<(),String> { for entry in fs::read_dir(dir).map_err(|e|e.to_string())? { let entry=entry.map_err(|e|e.to_string())?;let path=entry.path();if entry.file_type().map_err(|e|e.to_string())?.is_dir(){collect(&path,out)?}else if ["jpg","jpeg","png","webp","gif","mp4","webm","mov"].contains(&path.extension().and_then(|v|v.to_str()).unwrap_or("").to_lowercase().as_str()){out.push(path)} } Ok(()) }
             let mut paths=Vec::new();collect(&temp,&mut paths)?;paths.sort();if paths.is_empty(){return Err("No downloadable media found. The link is saved; you can import files manually.".to_string())}
+            let _lock = library_io_lock();
             let mut imported=Vec::new();for path in paths { imported.push(import_asset_impl(app.clone(),path.to_string_lossy().to_string(),folder.clone())?); } Ok(imported)
         })();let _=fs::remove_dir_all(&temp);result
     }).await.map_err(|e|e.to_string())?
@@ -894,7 +1125,14 @@ fn install_font(app: tauri::AppHandle, file: String, name: String) -> Result<Str
     {
         use std::os::windows::ffi::OsStrExt;
         let root = library_path(&app)?;
+        trash::check_library_dirs_safe(&root)?;
         let (source, _) = safe_asset_path(&root, &file)?;
+        if !fs::symlink_metadata(&source)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false)
+        {
+            return Err("Font file not found".into());
+        }
         let file_name = source
             .file_name()
             .and_then(|v| v.to_str())
@@ -908,9 +1146,6 @@ fn install_font(app: tauri::AppHandle, file: String, name: String) -> Result<Str
             .to_ascii_lowercase();
         if ext != "ttf" && ext != "otf" {
             return Err("Windows installation requires a TTF or OTF file. This web font can still be previewed.".into());
-        }
-        if !source.is_file() {
-            return Err("Font file not found".into());
         }
         let dir = PathBuf::from(
             std::env::var_os("LOCALAPPDATA").ok_or("Local application data folder unavailable")?,
@@ -996,8 +1231,12 @@ struct PreviewInfo {
 }
 fn preview_impl(app: tauri::AppHandle, file: String) -> Result<PreviewInfo, String> {
     let root = library_path(&app)?;
+    trash::check_library_dirs_safe(&root)?;
     let (source, _) = safe_asset_path(&root, &file)?;
-    if !source.is_file() {
+    if !fs::symlink_metadata(&source)
+        .map(|m| !m.file_type().is_symlink() && m.is_file())
+        .unwrap_or(false)
+    {
         return Err("Asset not found".into());
     }
     let ext = source
@@ -1011,16 +1250,15 @@ fn preview_impl(app: tauri::AppHandle, file: String) -> Result<PreviewInfo, Stri
             palette: vec![],
         });
     }
-    let dir = root.join("thumbnails");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let name = format!(
-        "{}.jpg",
-        source
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("Invalid file name")?
-    );
+    let dir = trash::ensure_safe_dir_under(&root, &["thumbnails"])?;
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid file name")?;
+    let name = format!("{stem}.jpg");
+    trash::safe_single_name(&name)?;
     let output = dir.join(&name);
+    trash::check_not_symlink(&output)?;
     let ffmpeg = ffmpeg_program();
     let mut thumb = Command::new(&ffmpeg);
     #[cfg(target_os = "windows")]
@@ -1044,113 +1282,110 @@ fn preview_impl(app: tauri::AppHandle, file: String) -> Result<PreviewInfo, Stri
         let _ = fs::remove_file(&output);
         None
     };
-    let mut color = Command::new(&ffmpeg);
-    #[cfg(target_os = "windows")]
-    color.creation_flags(0x08000000);
-    let mut counts = std::collections::HashMap::<(u8, u8, u8), usize>::new();
-    let mut total_pixels = 0usize;
-    if let Ok(pixels) = color
-        .args(["-v", "error", "-i"])
-        .arg(&source)
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=32:32",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-",
-        ])
-        .output()
-    {
-        if pixels.status.success() {
-            for pixel in pixels.stdout.chunks_exact(3) {
-                total_pixels += 1;
-                *counts
-                    .entry((pixel[0] / 32, pixel[1] / 32, pixel[2] / 32))
-                    .or_default() += 1;
-            }
-        }
-    }
-    let mut bins: Vec<_> = counts.into_iter().collect();
-    bins.sort_by(|a, b| b.1.cmp(&a.1));
-    let min_count = (total_pixels / 50).max(1);
-    let mut dominant: Vec<_> = bins.iter().filter(|(_, c)| *c >= min_count).take(8).cloned().collect();
-    if dominant.is_empty() {
-        dominant = bins.into_iter().take(4).collect();
-    }
-    let palette = dominant
-        .into_iter()
-        .map(|((r, g, b), _)| format!("#{:02x}{:02x}{:02x}", r * 32 + 16, g * 32 + 16, b * 32 + 16))
-        .collect();
-    Ok(PreviewInfo { thumbnail, palette })
+    Ok(PreviewInfo { thumbnail, palette: vec![] })
 }
 #[tauri::command]
 async fn prepare_preview(app: tauri::AppHandle, file: String) -> Result<PreviewInfo, String> {
-    tauri::async_runtime::spawn_blocking(move || preview_impl(app, file))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        preview_impl(app, file)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 fn delete_asset_file(app: tauri::AppHandle, file: String) -> Result<(), String> {
+    let _lock = library_io_lock();
     let root = library_path(&app)?;
-    let (asset, clean_rel) = safe_asset_path(&root, &file)?;
-    let index = root.join("library.json");
-    if index.exists() {
-        let data = fs::read_to_string(&index).map_err(|e| e.to_string())?;
-        let sources: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-        if let Some(items) = sources.as_array() {
-            let referenced = items.iter().any(|s| {
-                s["assets"]
-                    .as_array()
-                    .map(|assets| {
-                        assets.iter().any(|a| {
-                            a["file"]
-                                .as_str()
-                                .map(|f| f.replace('\\', "/") == clean_rel)
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false)
-            });
-            if referenced {
-                return Ok(());
-            }
-        }
-    }
-    if asset.is_file() {
-        fs::remove_file(&asset).map_err(|e| e.to_string())?;
-        if let Some(parent) = asset.parent() {
-            if parent != root.join("assets") {
-                let _ = fs::remove_dir(parent);
-            }
-        }
-    }
-    if let Some(stem) = asset.file_stem().and_then(|s| s.to_str()) {
-        let thumb = root.join("thumbnails").join(format!("{stem}.jpg"));
-        if thumb.is_file() {
-            let _ = fs::remove_file(thumb);
-        }
-        remove_custom_thumbnails(&root.join("thumbnails"), stem);
-    }
-    Ok(())
+    trash::delete_unreferenced_asset_file_at(&root, &file)
 }
-fn remove_custom_thumbnails(dir: &Path, stem: &str) {
+#[tauri::command]
+async fn trash_items(
+    app: tauri::AppHandle,
+    targets: Vec<trash::TrashTarget>,
+    now_iso: Option<String>,
+) -> Result<trash::TrashCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::trash_items_at(&root, &targets, now_iso.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn restore_from_trash(
+    app: tauri::AppHandle,
+    targets: Vec<trash::TrashTarget>,
+) -> Result<trash::TrashCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::restore_items_at(&root, &targets)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn permanently_delete_trashed(
+    app: tauri::AppHandle,
+    targets: Vec<trash::TrashTarget>,
+) -> Result<trash::TrashCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::permanently_delete_trashed_at(&root, &targets)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn clear_trash(app: tauri::AppHandle) -> Result<trash::TrashCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::clear_trash_at(&root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn purge_expired_trash(app: tauri::AppHandle) -> Result<trash::TrashCommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::purge_expired_trash_at(
+            &root,
+            trash::current_unix_secs(),
+            trash::TRASH_RETENTION_SECS,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn remove_custom_thumbnails(root: &Path, stem: &str) -> Result<(), String> {
+    trash::check_ancestors_under_root(root, &["thumbnails"])?;
+    let dir = root.join("thumbnails");
     let prefix = format!("{stem}-t");
-    if let Ok(entries) = fs::read_dir(dir) {
+    if let Ok(entries) = fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(rest) = name.strip_prefix(&prefix) {
                 if let Some(ms) = rest.strip_suffix(".jpg") {
                     if !ms.is_empty() && ms.bytes().all(|b| b.is_ascii_digit()) {
-                        let _ = fs::remove_file(entry.path());
+                        let path = entry.path();
+                        if fs::symlink_metadata(&path)
+                            .map(|m| !m.file_type().is_symlink() && m.is_file())
+                            .unwrap_or(false)
+                        {
+                            let _ = fs::remove_file(path);
+                        }
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 #[tauri::command]
 async fn set_video_thumbnail(app: tauri::AppHandle, file: String, time: f64, previous: Option<String>) -> Result<String, String> {
@@ -1158,16 +1393,22 @@ async fn set_video_thumbnail(app: tauri::AppHandle, file: String, time: f64, pre
         if !time.is_finite() || time < 0.0 {
             return Err("Invalid frame time".to_string());
         }
+        let _lock = library_io_lock();
         let root = library_path(&app)?;
+        trash::check_library_dirs_safe(&root)?;
         let (source, _) = safe_asset_path(&root, &file)?;
-        if !source.is_file() {
+        if !fs::symlink_metadata(&source)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false)
+        {
             return Err("Video file not found".into());
         }
         let stem = source.file_stem().and_then(|s| s.to_str()).ok_or("Invalid file name")?.to_string();
-        let dir = root.join("thumbnails");
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dir = trash::ensure_safe_dir_under(&root, &["thumbnails"])?;
         let name = format!("{stem}-t{}.jpg", (time * 1000.0).round() as u64);
+        trash::safe_single_name(&name)?;
         let output = dir.join(&name);
+        trash::check_not_symlink(&output)?;
         let mut cmd = Command::new(ffmpeg_program());
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000);
@@ -1186,10 +1427,17 @@ async fn set_video_thumbnail(app: tauri::AppHandle, file: String, time: f64, pre
             return Err("Could not capture that frame. Make sure FFmpeg is installed.".into());
         }
         if let Some(prev) = previous {
-            let prev_name = Path::new(&prev).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            let is_custom = prev_name.starts_with(&format!("{stem}-t")) && prev_name.ends_with(".jpg");
-            if is_custom && prev_name != name {
-                let _ = fs::remove_file(dir.join(prev_name));
+            if let Ok(prev_name) = trash::safe_single_name(&prev) {
+                let is_custom = prev_name.starts_with(&format!("{stem}-t")) && prev_name.ends_with(".jpg");
+                if is_custom && prev_name != name {
+                    let prev_path = dir.join(prev_name);
+                    if fs::symlink_metadata(&prev_path)
+                        .map(|m| !m.file_type().is_symlink() && m.is_file())
+                        .unwrap_or(false)
+                    {
+                        let _ = fs::remove_file(prev_path);
+                    }
+                }
             }
         }
         Ok(name)
@@ -1198,16 +1446,58 @@ async fn set_video_thumbnail(app: tauri::AppHandle, file: String, time: f64, pre
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+async fn prepare_video_proxy(app: tauri::AppHandle, file: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
+        let root = library_path(&app)?;
+        trash::check_library_dirs_safe(&root)?;
+        let (source, _) = safe_asset_path(&root, &file)?;
+        if !fs::symlink_metadata(&source)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false)
+        {
+            return Err("Video file not found".into());
+        }
+        let stem = source.file_stem().and_then(|s| s.to_str()).ok_or("Invalid file name")?.to_string();
+        let dir = trash::ensure_safe_dir_under(&root, &["previews"])?;
+        let name = format!("{stem}.v2.mp4");
+        trash::safe_single_name(&name)?;
+        let out = dir.join(&name);
+        trash::check_not_symlink(&out)?;
+        let already_exists = fs::symlink_metadata(&out)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false);
+        if already_exists || media_cache::make_video_proxy(&source, &out) {
+            Ok(Some(name))
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn warm_discover_thumbs(app: tauri::AppHandle) -> Result<(), String> {
+    media_cache::warm_discover_thumbs(&app)
+}
+#[tauri::command]
 async fn reset_video_thumbnail(app: tauri::AppHandle, file: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
         let root = library_path(&app)?;
+        trash::check_library_dirs_safe(&root)?;
         let (source, _) = safe_asset_path(&root, &file)?;
         let stem = source.file_stem().and_then(|s| s.to_str()).ok_or("Invalid file name")?.to_string();
         let dir = root.join("thumbnails");
-        remove_custom_thumbnails(&dir, &stem);
-        let default = dir.join(format!("{stem}.jpg"));
-        if default.is_file() {
-            return Ok(Some(format!("{stem}.jpg")));
+        remove_custom_thumbnails(&root, &stem)?;
+        let default_name = format!("{stem}.jpg");
+        trash::safe_single_name(&default_name)?;
+        let default = dir.join(&default_name);
+        if fs::symlink_metadata(&default)
+            .map(|m| !m.file_type().is_symlink() && m.is_file())
+            .unwrap_or(false)
+        {
+            return Ok(Some(default_name));
         }
         Ok(preview_impl(app, file)?.thumbnail)
     })
@@ -1215,12 +1505,9 @@ async fn reset_video_thumbnail(app: tauri::AppHandle, file: String) -> Result<Op
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn reveal_asset_file(app: tauri::AppHandle, file: String) -> Result<(), String> {
+fn reveal_asset_file(app: tauri::AppHandle, file: String, trashed: Option<bool>) -> Result<(), String> {
     let root = library_path(&app)?;
-    let (asset, _) = safe_asset_path(&root, &file)?;
-    if !asset.is_file() {
-        return Err("Asset file not found on disk".into());
-    }
+    let asset = trash::resolve_asset_disk_path(&root, &file, trashed)?;
     let canonical = fs::canonicalize(&asset).unwrap_or(asset);
     #[cfg(target_os = "windows")]
     {
@@ -1253,12 +1540,9 @@ fn reveal_asset_file(app: tauri::AppHandle, file: String) -> Result<(), String> 
     }
 }
 #[tauri::command]
-fn get_asset_path(app: tauri::AppHandle, file: String) -> Result<String, String> {
+fn get_asset_path(app: tauri::AppHandle, file: String, trashed: Option<bool>) -> Result<String, String> {
     let root = library_path(&app)?;
-    let (asset, _) = safe_asset_path(&root, &file)?;
-    if !asset.is_file() {
-        return Err("Asset file not found on disk".into());
-    }
+    let asset = trash::resolve_asset_disk_path(&root, &file, trashed)?;
     let canonical = fs::canonicalize(&asset).unwrap_or(asset);
     let display = canonical.to_string_lossy();
     Ok(display.strip_prefix(r"\\?\").unwrap_or(&display).to_string())
@@ -1268,16 +1552,14 @@ async fn copy_image_to_clipboard(
     app: tauri::AppHandle,
     file: Option<String>,
     png_bytes: Option<Vec<u8>>,
+    trashed: Option<bool>,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let resolved_asset = match file {
             Some(rel) => {
                 let root = library_path(&app)?;
-                let (asset, _) = safe_asset_path(&root, &rel)?;
-                if !asset.is_file() {
-                    return Err("Asset file not found on disk".into());
-                }
+                let asset = trash::resolve_asset_disk_path(&root, &rel, trashed)?;
                 Some(asset)
             }
             None => None,
@@ -1349,7 +1631,7 @@ async fn copy_image_to_clipboard(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, file, png_bytes);
+        let _ = (app, file, png_bytes, trashed);
         Err("Native image clipboard fallback is only configured for Windows".into())
     }
 }
@@ -1362,6 +1644,20 @@ struct Capture {
     kind: String,
     #[serde(default)]
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    weight: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "weightMin")]
+    weight_min: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "weightMax")]
+    weight_max: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "isVariable")]
+    is_variable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "fontSource")]
+    font_source: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
@@ -1631,6 +1927,7 @@ async fn import_system_font(
         if !allowed {
             return Err("Font path is outside Windows font folders".into());
         }
+        let _lock = library_io_lock();
         import_asset_impl(app, canonical.to_string_lossy().into_owned(), folder)
     })
     .await
@@ -1889,6 +2186,7 @@ async fn import_google_font(
                 .output();
             let import_res = match dl_out {
                 Ok(out) if out.status.success() && temp.is_file() => {
+                    let _lock = library_io_lock();
                     import_asset_impl(app.clone(), temp.to_string_lossy().into_owned(), folder.clone())
                 }
                 _ => Err(format!("Failed to download weight {}", face.weight)),
@@ -1914,6 +2212,37 @@ async fn import_google_font(
 }
 
 #[tauri::command]
+fn capture_open_requests(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = inbox(&app)?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.to_string()),
+    };
+    Ok(entries.filter_map(Result::ok).filter_map(|entry| {
+        let name = entry.file_name();
+        let id = name.to_str()?.strip_suffix(".open")?;
+        uuid::Uuid::parse_str(id).ok().map(|id| id.to_string())
+    }).collect())
+}
+
+#[tauri::command]
+fn take_capture_open_request(app: tauri::AppHandle, id: String) -> Result<bool, String> {
+    let id = uuid::Uuid::parse_str(&id).map_err(|_| "Invalid asset ID")?;
+    let marker = inbox(&app)?.join(format!("{id}.open"));
+    match fs::remove_file(marker) {
+        Ok(()) => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.to_string()),
+    }
+}
+#[tauri::command]
 fn pending_captures(app: tauri::AppHandle) -> Result<Vec<Capture>, String> {
     let dir = inbox(&app)?;
     if !dir.exists() {
@@ -1932,12 +2261,22 @@ fn pending_captures(app: tauri::AppHandle) -> Result<Vec<Capture>, String> {
                         == Some(format!("{}.json", c.id).as_str())
                     && dir.join(&c.file).is_file()
                 {
-                    captures.push(c)
+                    let stamp = fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.created().or_else(|_| m.modified()).ok())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    let name = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    captures.push((stamp, name, c));
                 }
             }
         }
     }
-    Ok(captures)
+    captures.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(captures.into_iter().map(|(_, _, c)| c).collect())
 }
 #[tauri::command]
 async fn import_capture(app: tauri::AppHandle, capture: Capture, folder: Option<String>) -> Result<String, String> {
@@ -1949,21 +2288,26 @@ async fn import_capture(app: tauri::AppHandle, capture: Capture, folder: Option<
         .to_string_lossy()
         .to_string();
     tauri::async_runtime::spawn_blocking(move || {
+        let _lock = library_io_lock();
         if capture.kind == "video" && capture.file.ends_with(".mp4") {
             // The bridge already rendered this clip; preserve it without a second encode.
             let root = library_path(&app)?;
+            trash::check_library_dirs_safe(&root)?;
             let clean_folder = folder
                 .as_deref()
                 .map(str::trim)
                 .filter(|f| !f.is_empty())
                 .map(sanitize_folder_name);
             let target_dir = match clean_folder {
-                Some(ref f) => root.join("assets").join(f),
-                None => root.join("assets"),
+                Some(ref f) => {
+                    trash::safe_single_name(f)?;
+                    trash::ensure_safe_dir_under(&root, &["assets", f])?
+                }
+                None => trash::ensure_safe_dir_under(&root, &["assets"])?,
             };
-            fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
             let name = format!("{}.mp4", uuid::Uuid::new_v4());
             let dest = target_dir.join(&name);
+            trash::check_not_symlink(&dest)?;
             fs::copy(&path, dest).map_err(|e| e.to_string())?;
             Ok(match clean_folder {
                 Some(f) => format!("{f}/{name}"),
@@ -2030,6 +2374,11 @@ fn main() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol(media_cache::THUMB_SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            std::thread::spawn(move || responder.respond(media_cache::serve_discover_thumb(&app, &path)));
+        })
         .invoke_handler(tauri::generate_handler![
             refresh_discover_catalog,
             add_discover_site,
@@ -2060,14 +2409,25 @@ fn main() {
             import_google_font,
             prepare_preview,
             delete_asset_file,
+            trash_items,
+            restore_from_trash,
+            permanently_delete_trashed,
+            clear_trash,
+            purge_expired_trash,
             reveal_asset_file,
             get_asset_path,
             copy_image_to_clipboard,
             pending_captures,
+            capture_open_requests,
+            take_capture_open_request,
             import_capture,
             acknowledge_capture,
             set_video_thumbnail,
-            reset_video_thumbnail
+            prepare_video_proxy,
+            warm_discover_thumbs,
+            reset_video_thumbnail,
+            video_editor::probe_video_asset,
+            video_editor::export_edited_video
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Sightline");
@@ -2092,7 +2452,25 @@ mod capture_tests {
     #[test]
     fn rendered_mp4_is_accepted_but_untrusted_paths_are_not() {
         let id = uuid::Uuid::new_v4().to_string();
-        let mut c = Capture { id: id.clone(), file: format!("{id}.mp4"), title: "Example".into(), url: String::new(), kind: "video".into(), name: String::new(), tags: vec![], category: String::new(), notes: String::new(), annotations: vec![] };
+        let mut c = Capture {
+            id: id.clone(),
+            file: format!("{id}.mp4"),
+            title: "Example".into(),
+            url: String::new(),
+            kind: "video".into(),
+            name: String::new(),
+            family: None,
+            weight: None,
+            weight_min: None,
+            weight_max: None,
+            is_variable: None,
+            style: None,
+            font_source: None,
+            tags: vec![],
+            category: String::new(),
+            notes: String::new(),
+            annotations: vec![],
+        };
         assert!(valid_capture(&c));
         c.file = format!("../{id}.mp4");
         assert!(!valid_capture(&c));
@@ -2105,6 +2483,49 @@ mod capture_tests {
         }
         c.file = format!("../{id}.gif");
         assert!(!valid_capture(&c));
+    }
+
+    #[test]
+    fn font_capture_preserves_metadata_and_defaults_legacy_records() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let legacy_json = serde_json::json!({
+            "id": id,
+            "file": format!("{id}.woff2"),
+            "title": "Example",
+            "url": "https://example.com",
+            "kind": "font",
+            "name": "Inter"
+        });
+        let legacy: Capture = serde_json::from_value(legacy_json).unwrap();
+        assert!(valid_capture(&legacy));
+        assert_eq!(legacy.family, None);
+        assert_eq!(legacy.weight, None);
+        assert_eq!(legacy.is_variable, None);
+
+        let var_json = serde_json::json!({
+            "id": id,
+            "file": format!("{id}.woff2"),
+            "title": "Example",
+            "url": "https://example.com",
+            "kind": "font",
+            "name": "Inter 100-900",
+            "family": "Inter",
+            "weight": 400,
+            "weightMin": 100,
+            "weightMax": 900,
+            "isVariable": true,
+            "style": "normal",
+            "fontSource": "capture"
+        });
+        let captured: Capture = serde_json::from_value(var_json).unwrap();
+        assert!(valid_capture(&captured));
+        assert_eq!(captured.family.as_deref(), Some("Inter"));
+        assert_eq!(captured.weight, Some(400));
+        assert_eq!(captured.weight_min, Some(100));
+        assert_eq!(captured.weight_max, Some(900));
+        assert_eq!(captured.is_variable, Some(true));
+        assert_eq!(captured.style.as_deref(), Some("normal"));
+        assert_eq!(captured.font_source.as_deref(), Some("capture"));
     }
 
     #[test]
@@ -2253,5 +2674,17 @@ mod capture_tests {
         // Calling organize again should be a clean idempotent no-op
         organize_library_assets_at(&root).unwrap();
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod library_palette_tests {
+    #[test]
+    fn removes_only_library_asset_palettes() {
+        let mut data = serde_json::json!([{"title":"Keep", "assets":[{"id":"a", "palette":["#ffffff"], "paletteVersion":1, "annotations":[{"text":"Keep"}]}]}]);
+        assert!(super::clear_library_palettes(&mut data));
+        assert!(data[0]["assets"][0].get("palette").is_none());
+        assert_eq!(data[0]["assets"][0]["annotations"][0]["text"], "Keep");
+        assert!(!super::clear_library_palettes(&mut data));
     }
 }
