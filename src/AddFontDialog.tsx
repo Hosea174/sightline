@@ -1,5 +1,5 @@
 import { ChoiceMenu } from './components/ui/choice-menu';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 import {
@@ -24,7 +24,6 @@ import {
   isFontFilename,
   parseFontFilenameMeta,
 } from './logic';
-import { Asset, Source } from './types';
 
 export type AddFontTab = 'google' | 'local' | 'upload';
 

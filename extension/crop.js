@@ -6,7 +6,7 @@ syncHistoryButtons();
 function syncCropControls(r,state){
  const full=state?state.full:(Math.abs(r.x)<1e-6&&Math.abs(r.y)<1e-6&&Math.abs(r.w-1)<1e-6&&Math.abs(r.h-1)<1e-6);
  const active=state?state.active:editor?.isActive?.()||false;
- if(cropToggle){cropToggle.setAttribute('aria-pressed',String(active));cropToggle.title=active?'Done cropping (C)':'Crop (C)';cropToggle.setAttribute('aria-label',cropToggle.title)}
+ if(cropToggle){cropToggle.setAttribute('aria-pressed',String(active));cropToggle.title=active?'Done cropping':'Crop';cropToggle.setAttribute('aria-label',cropToggle.title)}
  if(resetCrop)resetCrop.disabled=full&&!active;
  const sizeEl=document.getElementById('crop-size');
  if(sizeEl&&canvas.width&&canvas.height){

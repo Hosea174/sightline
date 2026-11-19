@@ -1,5 +1,7 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 
+import { fixMojibakeDeep } from './mojibake';
+
 export type DiscoverCatalog<T> = { sites: T[]; imageDir: string };
 
 let cached: Promise<DiscoverCatalog<unknown>> | null = null;
@@ -7,6 +9,7 @@ let cached: Promise<DiscoverCatalog<unknown>> | null = null;
 const isNative = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 export async function attachDiscoverPalettes<T extends { url: string; colors?: string[] }>(rows: T[]): Promise<T[]> {
+  rows = fixMojibakeDeep(rows);
   if (!isNative()) return rows;
   try {
     const raw = await invoke<string | null>('load_discover_palettes');

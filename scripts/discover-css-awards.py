@@ -21,7 +21,7 @@ def browser_session():
 
 def run_browser(cli, session, *args, input=None):
     result = subprocess.run([cli, '--session', session, '--json', *args], input=input,
-                            capture_output=True, text=True, timeout=180)
+                            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=180)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or f'agent-browser exited {result.returncode}')
     response = json.loads(result.stdout)

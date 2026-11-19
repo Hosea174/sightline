@@ -11,12 +11,12 @@ const pauseIcon='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" str
 function syncCropControls(r,state){
  const full=state?state.full:(Math.abs(r.x)<1e-6&&Math.abs(r.y)<1e-6&&Math.abs(r.w-1)<1e-6&&Math.abs(r.h-1)<1e-6);
  const active=state?state.active:cropEditor?.isActive?.()||false;
- if(cropToggle){cropToggle.setAttribute('aria-pressed',String(active));cropToggle.title=active?'Done cropping (C)':'Crop (C)';cropToggle.setAttribute('aria-label',cropToggle.title)}
+ if(cropToggle){cropToggle.setAttribute('aria-pressed',String(active));cropToggle.title=active?'Done cropping':'Crop';cropToggle.setAttribute('aria-label',cropToggle.title)}
  if(resetCrop)resetCrop.disabled=full&&!active;
 }
 const cropEditor=createCropEditor($('crop-overlay'),(r,state)=>syncCropControls(r,state),before=>remember(before));
 syncCropControls(cropEditor.get());
-const annotations=createAnnotations($('media-frame'),video,()=>cropEditor.get(),()=>[...clips].sort((a,b)=>a.at-b.at),time=>{const clip=clips.find(c=>time>=c.start&&time<=c.end);if(clip)setTime(clip.at+(time-clip.start)/clipSpeed(clip))},{now:()=>playhead,duration:()=>duration,limits:()=>({start:timelineStart(),end:timelineEnd()}),seek:setTime},()=>remember(),drawing=>{if(drawing)cropEditor.setActive?.(false)});
+const annotations=createAnnotations($('media-frame'),video,()=>cropEditor.get(),()=>[...clips].sort((a,b)=>a.at-b.at),time=>{const clip=clips.find(c=>time>=c.start&&time<=c.end);if(clip)setTime(clip.at+(time-clip.start)/clipSpeed(clip))},{now:()=>playhead,duration:()=>duration,limits:()=>({start:timelineStart(),end:timelineEnd()}),seek:setTime,snap:(edges,opts,e)=>snapEdges(edges,opts,e),clearSnap:()=>hideGuide()},()=>remember(),drawing=>{if(drawing)cropEditor.setActive?.(false)});
 function snapshot(crop=cropEditor.get()){return {clips:clips.map(c=>({...c})),crop,annotations:annotations.snapshot()}}
 function syncHistoryButtons(){$('undo').disabled=!history.length;$('redo').disabled=!future.length}
 function pushHistory(entry){history.push(entry);if(history.length>50)history.shift();future=[];if(loaded)dirty=true;syncHistoryButtons()}
@@ -75,7 +75,7 @@ function applyTimelineLayout(){
  timelinePanel.classList?.toggle('minimized',timelineMinimized);
  timelinePanel.style.height=timelineMinimized?'':`${timelineHeight}px`;
  if(timelineToggle){
-  const label=timelineMinimized?'Restore timeline (Ctrl+`)':'Minimize timeline (Ctrl+`)';
+  const label=timelineMinimized?'Restore timeline':'Minimize timeline';
   timelineToggle.setAttribute('aria-expanded',String(!timelineMinimized));
   timelineToggle.title=label;
   timelineToggle.setAttribute('aria-label',label);
@@ -139,6 +139,18 @@ if(speedSelect){
 function locate(t){let i=clips.findIndex(c=>t>=c.at&&t<end(c));if(i>=0)return i;i=clips.findIndex(c=>c.at>t);return i<0?clips.length-1:i}
 function setTime(t){if(!duration||!clips.length)return;playhead=clamp(t,0,timelineEnd());playingClip=locate(playhead);const c=clips[playingClip];const spd=clipSpeed(c);const target=clamp(c.start+(playhead-c.at)*spd,c.start,c.end);if(Math.abs(video.currentTime-target)>0.001)video.currentTime=target;if('playbackRate' in video)video.playbackRate=spd;render()}
 function normalizeStart(){const first=Math.min(...clips.map(c=>c.at));if(first>0){clips.forEach(c=>c.at-=first);playhead=Math.max(0,playhead-first);annotations.shiftTiming?.(0,-first)}}
+function positionPlayhead(){
+ const w=track.clientWidth;
+ if(!w||!head)return;
+ const x=Math.max(0,Math.min(w,playhead/duration*w));
+ head.style.left=(track.offsetLeft+track.clientLeft+x)+'px';
+ head.style.height=(track.offsetTop+track.offsetHeight)+'px';
+ head.style.setProperty('--cap-shift',(Math.max(0,34-x)-Math.max(0,34-(w-x)))+'px');
+ head.classList.toggle('dragging',Boolean(drag?.seek));
+ const label=head.querySelector('.playhead-time');
+ if(label)label.textContent=format(playhead);
+}
+if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>{if(duration)positionPlayhead()}).observe(track);
 function render(){
  if(!duration)return;
  annotations.renderTimeline();
@@ -153,7 +165,7 @@ function render(){
   el.tabIndex=0;
   const spd=clipSpeed(c),spdTag=Math.abs(spd-1)>1e-4?` · ${spd}×`:'';
   el.setAttribute('aria-label',`Clip ${i+1}, source ${format(c.start)} to ${format(c.end)}, timeline ${format(c.at)}${spdTag}`);
-  const grip=side=>`<span class="clip-speed-handle ${side}" data-side="speed-${side}" title="Drag inward to speed up or outward to slow down · Shift for 0.25× steps"></span>`;
+  const grip=side=>`<span class="clip-speed-handle ${side}" data-side="speed-${side}" title="Drag inward to speed up or outward to slow down"></span>`;
   el.innerHTML=grip('left')+grip('right')+'<span class="handle left" data-side="left" title="Trim start"></span><div class="clip-label">Video '+(i+1)+spdTag+'</div><span class="handle right" data-side="right" title="Trim end"></span>'+(isRetiming?`<div class="clip-speed-readout">${spd}× · ${format(width(c))}</div>`:'');
   el.onpointerdown=e=>{
    if(e.button!==undefined&&e.button!==0)return;
@@ -186,7 +198,7 @@ function render(){
    speedSelect.dispatchEvent?.(new CustomEvent('sightline:sync-value'));
   }
  }
- head.style.left=(playhead/duration*100)+'%';
+ positionPlayhead();
  head.setAttribute('aria-valuemax',timelineEnd().toFixed(2));
  head.setAttribute('aria-valuenow',playhead.toFixed(2));
  $('clock').textContent=`${format(playhead)} / ${format(timelineEnd())}`;
@@ -196,11 +208,40 @@ function render(){
  play.innerHTML=video.paused?playIcon:pauseIcon;
 }
 function point(e){const r=track.getBoundingClientRect();return clamp((e.clientX-r.left)/r.width*duration,0,duration)}
-function startSeek(e){if(!duration)return;e.preventDefault();e.stopPropagation();video.pause();track.setPointerCapture(e.pointerId);drag={seek:true};setTime(point(e))}
+const SNAP_PX=8;let snapGuide=null;
+function hideGuide(){if(snapGuide)snapGuide.hidden=true}
+function showGuide(t){
+ const host=head?.parentElement;
+ if(!host?.appendChild||!track.clientWidth||!duration)return;
+ if(!snapGuide){snapGuide=document.createElement('div');snapGuide.className='snap-guide';snapGuide.setAttribute('aria-hidden','true');host.appendChild(snapGuide)}
+ snapGuide.hidden=false;
+ snapGuide.style.left=(track.offsetLeft+track.clientLeft+clamp(t/duration,0,1)*track.clientWidth)+'px';
+ snapGuide.style.height=(track.offsetTop+track.offsetHeight)+'px';
+}
+function snapPoints(opts={}){
+ const pts=[0,duration,timelineEnd()];
+ clips.forEach((c,i)=>{if(opts.clip===i)return;pts.push(c.at,end(c))});
+ for(const a of annotations.snapshot())if(a.start!=null&&a.id!==opts.ann)pts.push(a.start,a.end);
+ if(opts.playhead!==false)pts.push(playhead);
+ return pts;
+}
+// Finds the smallest shift that aligns any of `edges` with a snap point within ~8px. Alt disables.
+function snapEdges(edges,opts,e){
+ if(e?.altKey||!duration){hideGuide();return null}
+ const w=track.getBoundingClientRect?.().width||track.clientWidth||0;
+ if(!w){hideGuide();return null}
+ const limit=SNAP_PX/w*duration,pts=snapPoints(opts||{});
+ let best=null;
+ for(const edge of edges)for(const p of pts){const d=p-edge;if(Math.abs(d)<=limit&&(!best||Math.abs(d)<Math.abs(best.delta)))best={delta:d,point:p}}
+ if(best)showGuide(best.point);else hideGuide();
+ return best;
+}
+function startSeek(e){if(!duration)return;e.preventDefault();e.stopPropagation();video.pause();track.setPointerCapture(e.pointerId);drag={seek:true};seekTo(e)}
+function seekTo(e){let t=point(e);const s=snapEdges([t],{playhead:false},e);if(s)t=clamp(t+s.delta,0,duration);setTime(t)}
 track.onpointerdown=e=>{if(e.target.closest('.clip'))return;startSeek(e)};head.onpointerdown=startSeek;ruler.onpointerdown=startSeek;
 track.onpointermove=e=>{
  if(!drag)return;
- if(drag.seek){setTime(point(e));return}
+ if(drag.seek){seekTo(e);return}
  if(drag.side.startsWith('speed-')){
   if(!drag.changed&&Math.abs(e.clientX-drag.x)<2)return;
   const o=drag.original,origSpd=clipSpeed(o),sourceLen=Math.max(frame,o.end-o.start),origWidth=sourceLen/origSpd;
@@ -243,7 +284,8 @@ track.onpointermove=e=>{
   return;
  }
  const c=clips[drag.i];if(!c)return;
- const spd=clipSpeed(c),d=(e.clientX-drag.x)/drag.trackWidth*drag.originalDuration,o=drag.original;
+ const spd=clipSpeed(c),o=drag.original;let d=(e.clientX-drag.x)/drag.trackWidth*drag.originalDuration;
+ const snapped=snapEdges(drag.side==='left'?[o.at+d]:drag.side==='right'?[end(o)+d]:[o.at+d,end(o)+d],{clip:drag.i},e);if(snapped)d+=snapped.delta;
  const others=clips.filter((_,i)=>i!==drag.i);
  const left=Math.max(0,...others.filter(x=>end(x)<=o.at+0.0001).map(end));
  const right=Math.min(Math.max(metadataDuration,duration),...others.filter(x=>x.at>=end(o)-0.0001).map(x=>x.at));
@@ -261,8 +303,8 @@ track.onpointermove=e=>{
  }
  drag.changed=true;render();
 };
-window.addEventListener('pointerup',()=>{if(!drag)return;if(drag.side?.startsWith('speed-')&&!drag.changed){drag=null;return}if(drag.changed&&drag.before)pushHistory(drag.before);if(drag.changed&&drag.side==='left'){normalizeStart();setTime(clips[drag.i].at)}else if(drag.changed&&drag.side.startsWith('speed-')){setTime(clamp(playhead,0,duration))}drag=null;syncDuration();render()});
-window.addEventListener('pointercancel',()=>{if(drag&&drag.changed&&drag.before){clips=drag.before.clips.map(item=>({...item}));annotations.restore(drag.before.annotations||[]);if(Number.isFinite(drag.originalPlayhead))playhead=drag.originalPlayhead;syncDuration()}drag=null;render()});
+window.addEventListener('pointerup',()=>{hideGuide();if(!drag)return;if(drag.side?.startsWith('speed-')&&!drag.changed){drag=null;return}if(drag.changed&&drag.before)pushHistory(drag.before);if(drag.changed&&drag.side==='left'){normalizeStart();setTime(clips[drag.i].at)}else if(drag.changed&&drag.side.startsWith('speed-')){setTime(clamp(playhead,0,duration))}drag=null;syncDuration();render()});
+window.addEventListener('pointercancel',()=>{hideGuide();if(drag&&drag.changed&&drag.before){clips=drag.before.clips.map(item=>({...item}));annotations.restore(drag.before.annotations||[]);if(Number.isFinite(drag.originalPlayhead))playhead=drag.originalPlayhead;syncDuration()}drag=null;render()});
 function stepPlayback(){
  if(!video.paused&&!exporting&&clips.length){
   if(video.seeking){render();return}

@@ -162,7 +162,7 @@ collector=os.environ.get('SIGHTLINE_CSS_COLLECTOR')
 if collector:
     fd,css_file=tempfile.mkstemp(dir=path.parent,prefix='discover-css-',suffix='.json');os.close(fd)
     try:
-        process=subprocess.run([sys.executable,'-c',collector,'--seed',str(path),'--output',css_file],capture_output=True,text=True,timeout=240,creationflags=0x08000000 if os.name=='nt' else 0)
+        process=subprocess.run([sys.executable,'-c',collector,'--seed',str(path),'--output',css_file],capture_output=True,text=True,encoding='utf-8',errors='replace',env={**os.environ,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'},timeout=240,creationflags=0x08000000 if os.name=='nt' else 0)
         try:candidates=json.loads(Path(css_file).read_text(encoding='utf8'))
         except (ValueError,OSError):candidates=[]
         for row in candidates:

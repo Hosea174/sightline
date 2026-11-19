@@ -4,7 +4,7 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
  const overlay=frame.querySelector('.crop-overlay');
  function alignOverlays(){const f=frame.getBoundingClientRect(),r=media.getBoundingClientRect();let width=r.width,height=r.height;const iw=media.videoWidth||media.width,ih=media.videoHeight||media.height;if(iw&&ih){const scale=Math.min(width/iw,height/ih);width=iw*scale;height=ih*scale}const bounds={left:(r.left-f.left+(r.width-width)/2)+'px',top:(r.top-f.top+(r.height-height)/2)+'px',width:width+'px',height:height+'px',right:'auto',bottom:'auto'};Object.assign(layer.style,bounds);Object.assign(overlay.style,bounds)}
  new ResizeObserver(alignOverlays).observe(media);media.addEventListener('loadedmetadata',alignOverlays);media.addEventListener('load',alignOverlays);alignOverlays();
- const toolbar=document.createElement('div');toolbar.className='annotation-tools';toolbar.innerHTML='<button type="button" class="quiet icon-button annotation-toggle" data-action="add" aria-pressed="false" title="Add annotation (A or Ctrl+Shift+.)" aria-label="Add annotation (A or Ctrl+Shift+.)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button><button type="button" class="quiet icon-button" data-action="show" aria-pressed="true" title="Hide annotations (H)" aria-label="Hide annotations (H)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>';frame.closest('.preview').querySelector('.edit-actions').append(toolbar);
+ const toolbar=document.createElement('div');toolbar.className='annotation-tools';toolbar.innerHTML='<button type="button" class="quiet icon-button annotation-toggle" data-action="add" aria-pressed="false" title="Add annotation" aria-label="Add annotation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg></button><button type="button" class="quiet icon-button" data-action="show" aria-pressed="true" title="Hide annotations" aria-label="Hide annotations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>';frame.closest('.preview').querySelector('.edit-actions').append(toolbar);
  const list=document.createElement('div');list.className='annotation-list';document.querySelector('aside').append(list);
  let items=[],enabled=false,visible=true,start=null,dragging=false,timelineSignature='',listSignature='',layerSignature='';const lanes=timeline?document.createElement('div'):null;if(lanes){lanes.className='annotation-lanes';document.querySelector('.timeline-scroll').insertBefore(lanes,document.getElementById('track'))}const add=toolbar.querySelector('[data-action=add]'),show=toolbar.querySelector('[data-action=show]');
 
@@ -14,10 +14,10 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
 
  function syncButtons(){
   add.setAttribute('aria-pressed',String(enabled));
-  add.title=enabled?'Finish annotating (A or Ctrl+Shift+.)':'Add annotation (A or Ctrl+Shift+.)';
+  add.title=enabled?'Finish annotating':'Add annotation';
   add.setAttribute('aria-label',add.title);
   show.setAttribute('aria-pressed',String(visible));
-  show.title=visible?'Hide annotations (H)':'Show annotations (H)';
+  show.title=visible?'Hide annotations':'Show annotations';
   show.setAttribute('aria-label',show.title);
  }
 
@@ -88,7 +88,7 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
   media.pause?.();
   editor=document.createElement('form');editor.className='annotation-editor';editor.setAttribute('aria-label',isNew?'New annotation':'Edit annotation');
   const timed=Boolean(timeline&&item.start!=null);
-  editor.innerHTML='<div class="annotation-editor-heading"><strong></strong><button type="button" class="annotation-editor-close" aria-label="Close">&times;</button></div><textarea aria-label="Annotation note" placeholder="What caught your eye?" required></textarea>'+(timed?'<div class="annotation-editor-timing"><label>Start <input type="number" step="0.1" min="0" class="annotation-start" aria-label="Annotation start time in seconds"><span>s</span></label><label>End <input type="number" step="0.1" min="0" class="annotation-end" aria-label="Annotation end time in seconds"><span>s</span></label></div>':'')+'<div class="annotation-editor-actions"><button type="button" class="annotation-editor-delete">Delete</button><span></span><button type="button" class="annotation-editor-cancel">Cancel</button><button type="submit" class="annotation-editor-save">Save note</button></div>';
+  editor.innerHTML='<div class="annotation-editor-heading"><strong></strong><button type="button" class="annotation-editor-close" aria-label="Close">&times;</button></div><textarea aria-label="Annotation note" placeholder="What caught your eye?" required></textarea>'+(timed?'<div class="annotation-editor-timing"><label>Start <input type="number" step="any" min="0" class="annotation-start" aria-label="Annotation start time in seconds"><span>s</span></label><label>End <input type="number" step="any" min="0" class="annotation-end" aria-label="Annotation end time in seconds"><span>s</span></label></div>':'')+'<div class="annotation-editor-actions"><button type="button" class="annotation-editor-delete">Delete</button><span></span><button type="button" class="annotation-editor-cancel">Cancel</button><button type="submit" class="annotation-editor-save">Save note</button></div>';
   editor.querySelector('strong').textContent=isNew?'New annotation':'Annotation';
   const field=editor.querySelector('textarea');field.value=item.text||'';
   const startInput=editor.querySelector('.annotation-start'),endInput=editor.querySelector('.annotation-end');
@@ -111,9 +111,10 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
    item.text=text;
    if(timed&&startInput&&endInput){
     const limits=timeline.limits();
-    const usePlayhead=isNew&&startInput.value===item.start.toFixed(2)&&endInput.value===item.end.toFixed(2);
-    const sVal=usePlayhead?timeline.now():parseFloat(startInput.value);
-    const eVal=usePlayhead?limits.end:parseFloat(endInput.value);
+    const r2=n=>Math.round(n*100)/100;
+    const unchanged=startInput.value===item.start.toFixed(2)&&endInput.value===item.end.toFixed(2);
+    const sVal=unchanged?item.start:r2(parseFloat(startInput.value));
+    const eVal=unchanged?item.end:r2(parseFloat(endInput.value));
     if(Number.isFinite(sVal)&&Number.isFinite(eVal)){
      const clamped=clampAnnotationRange({start:Math.min(sVal,eVal),end:Math.max(sVal,eVal)},limits);
      item.start=clamped.start;item.end=clamped.end;
@@ -147,7 +148,8 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
    const minSpan=Math.min(0.5,span);
    const rawStart=Math.min(limits.end,Math.max(limits.start,timeline.now()));
    const safeStart=rawStart>limits.end-Math.min(0.1,span)?Math.max(limits.start,limits.end-minSpan):rawStart;
-   timing={start:safeStart,end:limits.end};
+   const atEnd=timeline.now()>=limits.end-0.05;
+   timing=atEnd?{start:limits.start,end:limits.end}:{start:safeStart,end:limits.end};
   }
   edit({id:crypto.randomUUID(),x,y,w:w>.01&&h>.01?w:0,h:w>.01&&h>.01?h:0,text:'',...timing},true);
  };
@@ -183,7 +185,7 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
    if(item.start==null)return;
    const lane=document.createElement('div');lane.className='annotation-lane';
    const bar=document.createElement('div');bar.className='annotation-clip';bar.tabIndex=0;bar.setAttribute('role','slider');
-   bar.setAttribute('aria-label',`Annotation ${i+1}: ${item.text}. Arrow keys move; Shift and arrows resize the end; drag an edge to resize`);
+   bar.setAttribute('aria-label',`Annotation ${i+1}: ${item.text}. Drag to move or drag an edge to resize`);
    bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax',String(duration));bar.setAttribute('aria-valuenow',item.start.toFixed(2));
    bar.title=`${item.text} - ${item.start.toFixed(2)} - ${item.end.toFixed(2)}s`;
    bar.style.left=(item.start/duration*100)+'%';bar.style.width=((item.end-item.start)/duration*100)+'%';
@@ -195,7 +197,8 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
     bar.setPointerCapture(e.pointerId);
     bar.onpointermove=event=>{
      if(!pushed){pushed=true;onMutate?.()}
-     const delta=(event.clientX-origin)/lane.getBoundingClientRect().width*duration,min=Math.min(.1,duration);
+     let delta=(event.clientX-origin)/lane.getBoundingClientRect().width*duration;const min=Math.min(.1,duration);
+     const snapped=timeline.snap?.(side==='left'?[oldStart+delta]:side==='right'?[oldEnd+delta]:[oldStart+delta,oldEnd+delta],{ann:item.id},event);if(snapped)delta+=snapped.delta;
      if(side==='left')item.start=Math.max(limits.start,Math.min(oldEnd-min,oldStart+delta));
      else if(side==='right')item.end=Math.min(limits.end,Math.max(oldStart+min,oldEnd+delta));
      else{item.start=Math.max(limits.start,Math.min(limits.end-(oldEnd-oldStart),oldStart+delta));item.end=item.start+oldEnd-oldStart}
@@ -203,8 +206,8 @@ function createAnnotations(frame, media, getCrop, getSegments, seek, timeline, o
      bar.title=`${item.text} - ${item.start.toFixed(2)} - ${item.end.toFixed(2)}s`;
      renderMarks();
     };
-    bar.onpointerup=()=>{dragging=false;render()};
-    bar.onpointercancel=()=>{item.start=oldStart;item.end=oldEnd;dragging=false;render()};
+    bar.onpointerup=()=>{timeline.clearSnap?.();dragging=false;render()};
+    bar.onpointercancel=()=>{timeline.clearSnap?.();item.start=oldStart;item.end=oldEnd;dragging=false;render()};
    };
    bar.onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();e.stopPropagation();onMutate?.();const delta=(e.key==='ArrowRight'?1:-1)*.1,length=item.end-item.start;if(e.shiftKey)item.end=Math.max(item.start+Math.min(.1,duration),Math.min(limits.end,item.end+delta));else{item.start=Math.max(limits.start,Math.min(limits.end-length,item.start+delta));item.end=item.start+length}render();lanes.children[i]?.querySelector('.annotation-clip')?.focus()};
    bar.ondblclick=()=>edit(item);

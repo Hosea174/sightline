@@ -23,12 +23,11 @@ const recording=mode==='review';
 
 type HoverTooltipProps={
  label:string;
- shortcut?:string;
  side?:'top'|'right'|'bottom'|'left';
  children:React.ReactElement<Record<string,unknown>>;
 };
 
-function HoverTooltip({label,shortcut,side='top',children}:HoverTooltipProps){
+function HoverTooltip({label,side='top',children}:HoverTooltipProps){
  const [open,setOpen]=useState(false);
  return <Tooltip open={open} onOpenChange={()=>{}}>
   <TooltipTrigger asChild>
@@ -40,7 +39,7 @@ function HoverTooltip({label,shortcut,side='top',children}:HoverTooltipProps){
    })}
   </TooltipTrigger>
   <TooltipContent side={side} className="pointer-events-none extension-tooltip">
-   {shortcut?<span className="tooltip-with-shortcut"><span>{label}</span><kbd>{shortcut}</kbd></span>:label}
+   {label}
   </TooltipContent>
  </Tooltip>;
 }
@@ -54,9 +53,9 @@ function ThemeToggle(){
  </HoverTooltip>;
 }
 
-function IconButton({id,label,shortcut,children,onClick}:{id?:string;label:string;shortcut?:string;children:React.ReactNode;onClick?:()=>void}){
- return <HoverTooltip label={label} shortcut={shortcut}>
-  <Button variant="outline" size="icon" id={id} aria-label={shortcut?`${label} (${shortcut})`:label} onClick={onClick}>{children}</Button>
+function IconButton({id,label,children,onClick}:{id?:string;label:string;children:React.ReactNode;onClick?:()=>void}){
+ return <HoverTooltip label={label}>
+  <Button variant="outline" size="icon" id={id} aria-label={label} onClick={onClick}>{children}</Button>
  </HoverTooltip>;
 }
 
@@ -143,38 +142,35 @@ function Popup(){
   window.addEventListener('keydown',onShortcut);
   return()=>{window.removeEventListener('sightline:popup-state',onUpdate);window.removeEventListener('keydown',onShortcut);};
  },[]);
- const visibleShortcut=popupState.shortcuts['capture-visible']||'Alt+Shift+S';
- const areaShortcut=popupState.shortcuts['capture-area']?`Ctrl+Alt+D / ${popupState.shortcuts['capture-area']}`:'Ctrl+Alt+D / Ctrl+Shift+D';
- const recordShortcut=popupState.shortcuts['record-tab']||'Alt+Shift+V';
  return <div className="capture-popup">
   <header className="popup-header"><div className="extension-brand"><img src="icons/icon-48.png" alt=""/><strong>Sightline</strong><Badge variant="secondary">Capture</Badge></div><ThemeToggle/></header>
   <main>
    <div className="tools">
-    <HoverTooltip label="Capture visible tab" shortcut={`S / ${visibleShortcut}`} side="bottom">
+    <HoverTooltip label="Capture visible tab" side="bottom">
      <Button id="screenshot" className="capture-primary" aria-label="Capture visible tab"><Camera/><span className="action-label">Capture visible tab</span></Button>
     </HoverTooltip>
     <div className="capture-options">
-     <HoverTooltip label="Capture entire scrolling page" shortcut="F" side="top">
+     <HoverTooltip label="Capture entire scrolling page" side="top">
       <Button variant="ghost" id="full-page" className="capture-option" aria-label="Capture full page"><span className="option-icon"><ScanLine/></span><span><strong>Full page</strong><small>Everything, top to bottom</small></span><ChevronRight/></Button>
      </HoverTooltip>
-     <HoverTooltip label="Capture selected area" shortcut={`A / ${areaShortcut}`} side="top">
+     <HoverTooltip label="Capture selected area" side="top">
       <Button variant="ghost" id="area" className="capture-option" aria-label="Capture area"><span className="option-icon"><Scan/></span><span><strong>Select an area</strong><small>Frame only what matters</small></span><ChevronRight/></Button>
      </HoverTooltip>
-     <HoverTooltip label={popupState.recording?'Stop recording':'Record current tab'} shortcut={`V / ${recordShortcut}`} side="top">
+     <HoverTooltip label={popupState.recording?'Stop recording':'Record current tab'} side="top">
       <Button variant="ghost" id="record" className="capture-option" aria-label={popupState.recording?'Stop recording':'Start recording'}><span className="option-icon"><Video/></span><span><strong className="action-label">Record tab</strong><small>Capture motion &amp; interactions</small></span><ChevronRight/></Button>
      </HoverTooltip>
     </div>
    </div>
    <div className="popup-secondary"><Separator/>
-    <HoverTooltip label="Inspect fonts used on this page" shortcut="T" side="top">
+    <HoverTooltip label="Inspect fonts used on this page" side="top">
      <Button variant="ghost" id="fonts" className="capture-option" aria-label="Explore page fonts"><span className="option-icon"><Type/></span><span><strong>Explore page fonts</strong><small>Collect webfonts &amp; weights</small></span><ChevronRight/></Button>
     </HoverTooltip>
    </div>
    <section className="popup-results"><div id="fontList"/><p id="status" role="status" aria-live="polite">Captures open in an editor before saving.</p></section>
   </main>
   <footer className="popup-footer">
-   <HoverTooltip label="Open saved recordings" shortcut="R" side="top"><Button variant="ghost" size="sm" id="recordings"><Film/> Recordings</Button></HoverTooltip>
-   <HoverTooltip label="Customize extension shortcuts" shortcut="K" side="top"><Button variant="ghost" size="sm" id="shortcuts"><Keyboard/> Shortcuts</Button></HoverTooltip>
+   <HoverTooltip label="Open saved recordings" side="top"><Button variant="ghost" size="sm" id="recordings"><Film/> Recordings</Button></HoverTooltip>
+   <HoverTooltip label="Customize extension shortcuts" side="top"><Button variant="ghost" size="sm" id="shortcuts"><Keyboard/> Shortcuts</Button></HoverTooltip>
   </footer>
  </div>;
 }
@@ -187,11 +183,11 @@ function Details(){return <aside className="capture-details"><div className="det
   <Field><FieldLabel htmlFor="title">Source name</FieldLabel><Input id="title" placeholder="Give your reference a name"/></Field>
   <Field><FieldLabel htmlFor="url">Website</FieldLabel><Input id="url" type="url" placeholder="https://"/></Field>
   <Field><FieldLabel htmlFor="category-trigger">Collection</FieldLabel><CustomSelect id="category" defaultValue="Web design" options={CATEGORY_OPTIONS} ariaLabel="Collection" triggerClassName="extension-select-trigger" markChanged/><span id="category-label" hidden/></Field>
-  <Field><FieldLabel htmlFor="tags">Tags</FieldLabel><div className="tags-field"><span id="tag-pills"/><Input id="tags" placeholder="Add a tag…" aria-autocomplete="list" aria-controls="tag-suggestions" autoComplete="off"/></div><div id="tag-suggestions" className="tag-suggestions" hidden role="listbox" aria-label="Suggested tags"/><FieldDescription>Press Enter to add a tag.</FieldDescription></Field>
+  <Field><FieldLabel htmlFor="tags">Tags</FieldLabel><div className="tags-field"><span id="tag-pills"/><Input id="tags" placeholder="Add a tag…" aria-autocomplete="list" aria-controls="tag-suggestions" autoComplete="off"/></div><div id="tag-suggestions" className="tag-suggestions" hidden role="listbox" aria-label="Suggested tags"/></Field>
   <Field><FieldLabel htmlFor="notes">Notes</FieldLabel><Textarea id="notes" placeholder="What makes this worth keeping?"/></Field>
  </FieldGroup>
  <Separator className="details-separator"/>
- <div className="annotations-heading"><h3>Annotations</h3><span>Press <kbd>A</kbd> or <kbd>Ctrl + Shift + .</kbd> or select the pen to leave a note.</span></div>
+ <div className="annotations-heading"><h3>Annotations</h3><span>Select the pen, then drag on the preview to leave a note.</span></div>
  </aside>}
 
 const COMMON_SHORTCUTS:[string,string][]=[
@@ -276,13 +272,13 @@ function Editor(){
   return()=>window.removeEventListener('sightline:shortcuts',open);
  },[]);
  return <div className={recording?'capture-editor recording-editor':'capture-editor image-editor'}>
-  <header className="editor-header"><div className="extension-brand"><img src="icons/icon-48.png" alt=""/><strong>Sightline</strong><ChevronRight/><span>{recording?'Recording editor':'Capture editor'}</span></div><div className="header-actions"><IconButton id="shortcuts-btn" label="Keyboard shortcuts" shortcut="?" onClick={()=>setShortcutsOpen(true)}><Keyboard/></IconButton><ThemeToggle/><Button variant="ghost" size="sm" id="discard"><Trash2/>Discard</Button><Button id="save" size="sm" disabled><Save/>{recording?'Save clip':'Save capture'}</Button></div></header>
+  <header className="editor-header"><div className="extension-brand"><img src="icons/icon-48.png" alt=""/><strong>Sightline</strong><ChevronRight/><span>{recording?'Recording editor':'Capture editor'}</span></div><div className="header-actions"><IconButton id="shortcuts-btn" label="Keyboard shortcuts" onClick={()=>setShortcutsOpen(true)}><Keyboard/></IconButton><ThemeToggle/><Button variant="ghost" size="sm" id="discard"><Trash2/>Discard</Button><Button id="save" size="sm" disabled><Save/>{recording?'Save clip':'Save capture'}</Button></div></header>
   <div className="editor-body"><main className="editor-main"><section className="preview">
-   <div className="workspace-heading"><div><h1>{recording?'Make the moment yours.':'Focus on the detail.'}</h1><p>{recording?'Trim, adjust speed, crop, and annotate your recording.':'Crop if needed, or leave a note on what stands out.'}</p></div><div className="edit-actions"><IconButton id="undo" label="Undo" shortcut="Ctrl+Z"><Undo2/></IconButton><IconButton id="redo" label="Redo" shortcut="Ctrl+Y"><Redo2/></IconButton><Separator orientation="vertical"/><Button variant="outline" size="sm" id="crop-toggle" aria-pressed="false"><Crop/> Crop</Button><IconButton id="reset-crop" label="Reset crop"><RotateCcw/></IconButton></div></div>
+   <div className="workspace-heading"><div><h1>{recording?'Make the moment yours.':'Focus on the detail.'}</h1><p>{recording?'Trim, adjust speed, crop, and annotate your recording.':'Crop if needed, or leave a note on what stands out.'}</p></div><div className="edit-actions"><IconButton id="undo" label="Undo"><Undo2/></IconButton><IconButton id="redo" label="Redo"><Redo2/></IconButton><Separator orientation="vertical"/><Button variant="outline" size="sm" id="crop-toggle" aria-pressed="false"><Crop/> Crop</Button><IconButton id="reset-crop" label="Reset crop"><RotateCcw/></IconButton></div></div>
    <div className="editor-stage"><div className="stage-viewport"><div className="media-frame" id="media-frame">{recording?<video id="video" playsInline/>:<canvas id="canvas"/>}<div className="crop-overlay" id="crop-overlay"/></div></div></div>
-   <div className="workspace-footer">{recording?<div className="transport"><HoverTooltip label="Play / pause" shortcut="Space"><Button variant="outline" size="icon" id="play" aria-label="Play or pause"><Play/></Button></HoverTooltip><span id="clock">00:00.00 / 00:00.00</span><span id="source"/></div>:<><span><Image/> Capture preview</span><span id="crop-size"/></>}<span id="status" role="status" aria-live="polite"/></div>
+   <div className="workspace-footer">{recording?<div className="transport"><HoverTooltip label="Play / pause"><Button variant="outline" size="icon" id="play" aria-label="Play or pause"><Play/></Button></HoverTooltip><span id="clock">00:00.00 / 00:00.00</span><span id="source"/></div>:<><span><Image/> Capture preview</span><span id="crop-size"/></>}<span id="status" role="status" aria-live="polite"/></div>
   </section>
-  {recording&&<section className="timeline-panel"><div id="timeline-resizer" className="timeline-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize timeline" tabIndex={0}><span className="timeline-resizer-grip" aria-hidden="true"/></div><div className="timeline-header"><div><Film/><strong>Timeline</strong><span id="duration"/></div><div className="timeline-actions"><HoverTooltip label="Clip playback speed (or drag an upper corner)"><div className="speed-control"><Gauge aria-hidden="true"/><CustomSelect id="speed" defaultValue="1" options={SPEED_OPTIONS} ariaLabel="Clip playback speed" triggerClassName="speed-select-trigger" menuAlign="end" formatValue={v=>`${v}×`}/></div></HoverTooltip><IconButton id="split" label="Split at playhead" shortcut="Ctrl+Alt+B"><Scissors/></IconButton><IconButton id="delete" label="Delete selected clip"><Trash2/></IconButton><IconButton id="reset" label="Restore timeline"><RotateCcw/></IconButton><Separator orientation="vertical"/><IconButton id="timeline-toggle" label="Minimize timeline" shortcut="Ctrl+`"><ChevronDown/></IconButton></div></div><div className="timeline-scroll"><div className="ruler" id="ruler" aria-label="Timeline ruler"/><div className="track" id="track" aria-label="Video timeline"><div id="clips"/><div id="playhead" className="playhead" role="slider" tabIndex={0} aria-label="Playhead" aria-valuemin={0} aria-valuenow={0}/></div></div></section>}
+  {recording&&<section className="timeline-panel"><div id="timeline-resizer" className="timeline-resizer" role="separator" aria-orientation="horizontal" aria-label="Resize timeline" tabIndex={0}><span className="timeline-resizer-grip" aria-hidden="true"/></div><div className="timeline-header"><div><Film/><strong>Timeline</strong><span id="duration"/></div><div className="timeline-actions"><HoverTooltip label="Clip playback speed (or drag an upper corner)"><div className="speed-control"><Gauge aria-hidden="true"/><CustomSelect id="speed" defaultValue="1" options={SPEED_OPTIONS} ariaLabel="Clip playback speed" triggerClassName="speed-select-trigger" menuAlign="end" formatValue={v=>`${v}×`}/></div></HoverTooltip><IconButton id="split" label="Split at playhead"><Scissors/></IconButton><IconButton id="delete" label="Delete selected clip"><Trash2/></IconButton><IconButton id="reset" label="Restore timeline"><RotateCcw/></IconButton><Separator orientation="vertical"/><IconButton id="timeline-toggle" label="Minimize timeline"><ChevronDown/></IconButton></div></div><div className="timeline-scroll"><div className="ruler" id="ruler" aria-label="Timeline ruler"/><div className="track" id="track" aria-label="Video timeline"><div id="clips"/></div><div id="playhead" className="playhead" role="slider" tabIndex={0} aria-label="Playhead" aria-valuemin={0} aria-valuenow={0}><span className="playhead-cap"><span className="playhead-time" aria-hidden="true">00:00.00</span></span></div></div></section>}
   </main><Details/></div><div id="toast" role="status" aria-live="polite"/>
   <ShortcutGuideDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}/>
   <ConfirmDialog/>

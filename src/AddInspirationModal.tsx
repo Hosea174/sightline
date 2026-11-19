@@ -662,8 +662,7 @@ export function AddInspirationModal({
                   </div>
                   <h3>Drop images or videos here</h3>
                   <p>
-                    Drag &amp; drop multiple visual files, paste from clipboard with Ctrl+V, or
-                    browse your computer.
+                    Add several images or videos by dragging them in, pasting, or browsing your computer.
                   </p>
                   <div className="create-dropzone-actions">
                     <Button type="button" size="sm" onClick={() => void browseFiles()}>
@@ -996,7 +995,7 @@ export function AddInspirationModal({
           >
             <Plus size={18} />
           </Button>
-          <span className="viewer-drop-hint">Drop multiple images or videos here, or paste with Ctrl+V</span>
+          <span className="viewer-drop-hint">Drop multiple images or videos here</span>
         </div>
       </div>
     </div>

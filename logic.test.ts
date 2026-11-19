@@ -684,3 +684,20 @@ test('trashService resolves trash URLs, supports browser fallback, and flushes w
   expect(formatTrashExpiryLabel('2026-11-01T00:00:00Z',tBase+29*86_400_000+1_000)).toBe('1 day left');
   expect(formatTrashExpiryLabel('2026-11-01T00:00:00Z',tBase+30*86_400_000)).toBe('Expires today');
 });
+
+import {fixMojibake,fixMojibakeDeep} from './src/lib/mojibake';
+import {pageSizeOptions,snapPageSize,gridColumnsCss} from './src/lib/gridColumns';
+test('fixMojibake repairs layered mojibake and leaves real text alone',()=>{
+  expect(fixMojibake('Exp\u00c3\u0192\u00c2\u00a9rience')).toBe('Exp\u00e9rience');
+  expect(fixMojibake('Odyss\u00c3\u00a9e')).toBe('Odyss\u00e9e');
+  expect(fixMojibake('Oak\u00e2me')).toBe('Oak\u00e2me');
+  expect(fixMojibake('Th\u00e9\u00e2tre')).toBe('Th\u00e9\u00e2tre');
+  expect(fixMojibake('plain')).toBe('plain');
+  const rows=[{title:'ok',tags:['a']}];expect(fixMojibakeDeep(rows)).toBe(rows);
+  expect(fixMojibakeDeep([{title:'Caf\u00c3\u00a9'}])).toEqual([{title:'Caf\u00e9'}]);
+});
+test('page sizes are whole rows for the view columns',()=>{
+  for(const c of [1,2,3,4,5,6,7,8])for(const n of pageSizeOptions(c))expect(n%c).toBe(0);
+  expect(snapPageSize(30,6)).toBe(30);expect(snapPageSize(30,7)).toBe(28);expect(snapPageSize(102,6)).toBe(102);
+  expect(gridColumnsCss('compact')).toContain('/6)');expect(gridColumnsCss('list')).toBeUndefined();
+});

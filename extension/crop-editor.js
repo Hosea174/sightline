@@ -26,11 +26,12 @@ function createCropEditor(overlay, onChange, onCommit) {
   const px=bounds.width?clamp((e.clientX-bounds.left)/bounds.width,0,1):0;
   const py=bounds.height?clamp((e.clientY-bounds.top)/bounds.height,0,1):0;
   const drawMode=side==='move'&&(isFull(rect)||!selection.contains(e.target));
-  drag={side,drawMode,startX:px,startY:py,x:e.clientX,y:e.clientY,original:{...rect}};
+  drag={pointerId:e.pointerId,side,drawMode,startX:px,startY:py,x:e.clientX,y:e.clientY,original:{...rect}};
   overlay.setPointerCapture(e.pointerId);
  });
  overlay.addEventListener('pointermove',e=>{
-  if(!drag)return;
+  if(!drag||e.pointerId!==drag.pointerId)return;
+  if(e.buttons===0&&e.pointerType==='mouse'){endDrag(true);return}
   const bounds=overlay.getBoundingClientRect();
   if(!bounds.width||!bounds.height)return;
   if(drag.drawMode){
@@ -46,8 +47,18 @@ function createCropEditor(overlay, onChange, onCommit) {
   }
   set(adjust(drag.original,drag.side,(e.clientX-drag.x)/bounds.width,(e.clientY-drag.y)/bounds.height));
  });
- overlay.addEventListener('pointerup',()=>{if(!drag)return;const before=drag.original;drag=null;if(JSON.stringify(before)!==JSON.stringify(rect))onCommit?.(before)});
- overlay.addEventListener('pointercancel',()=>{if(drag){set(drag.original);drag=null}});
+ function endDrag(commit=true){
+  if(!drag)return;
+  const d=drag;drag=null;
+  try{if(d.pointerId!=null&&overlay.hasPointerCapture?.(d.pointerId))overlay.releasePointerCapture(d.pointerId)}catch{}
+  if(commit&&JSON.stringify(d.original)!==JSON.stringify(rect))onCommit?.(d.original);
+  else if(!commit)set(d.original);
+ }
+ overlay.addEventListener('pointerup',e=>{if(drag&&e.pointerId!==drag.pointerId)return;endDrag(true)});
+ overlay.addEventListener('lostpointercapture',e=>{if(drag&&e.pointerId===drag.pointerId)endDrag(true)});
+ overlay.addEventListener('pointercancel',()=>endDrag(false));
+ window.addEventListener('blur',()=>endDrag(true));
+ window.addEventListener('keydown',e=>{if(drag&&e.key==='Escape'){e.preventDefault();e.stopPropagation();endDrag(false)}},true);
  overlay.addEventListener('keydown',e=>{if(!active||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();e.stopPropagation();const before={...rect},step=e.shiftKey?.05:.01,dx=e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0,dy=e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0;set(adjust(before,e.target.dataset.side||'move',dx,dy));onCommit?.(before)});
  draw();
  return {get:()=>({...rect}),set,reset:()=>{rect={x:0,y:0,w:1,h:1};active=false;draw()},setActive,isActive:()=>active,isFull:()=>isFull()};

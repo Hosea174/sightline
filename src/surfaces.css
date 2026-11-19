@@ -1,0 +1,122 @@
+﻿/*
+ * Opaque surfaces. Loaded after app.css and media.css so it replaces their
+ * translucent and backdrop-blurred backgrounds with solid theme tokens.
+ * Text >= 4.5:1, icons and control borders >= 3:1 in light and dark themes.
+ */
+.setup-card,.workspace-bar,.sidebar,.main>header,.workspace-header,.collection-tabs,.toolbar,
+.header-right .header-action,.menu-panel,.asset-count,.card-favorite,.card-video-btn,
+.study-cover .visited,.stage-nav,.play-badge,.annotation-toolbar,.overlay,.media-viewer,
+.canvas-hud-group{
+  -webkit-backdrop-filter:none!important;backdrop-filter:none!important;
+}
+.setup-card,.dark .setup-card{background:hsl(var(--card))}
+.main>header,.workspace-header,.dark .main>header,.dark .workspace-header,
+.collection-tabs,.dark .collection-tabs,.toolbar,.dark .toolbar{background:hsl(var(--background))}
+.preview-header,.viewer-details-head,.viewer-strip{background:hsl(var(--card))}
+.viewer-stage{background:hsl(var(--muted))}
+.overlay{background:hsl(240 10% 6%/.62)}
+
+/* Controls: opaque fill, 3:1 border */
+.header-right .header-action,.dark .header-right .header-action,
+.command-search-btn,.search,.dark .search,.filter-trigger,.dark .filter-trigger,
+.group-switch,.view-switch,.dark .group-switch,.dark .view-switch,
+.active-filters button,.dark .active-filters button,.choice-menu{
+  background:hsl(var(--control));border-color:hsl(var(--control-border));
+}
+.header-right .header-action:hover,.dark .header-right .header-action:hover,
+.command-search-btn:hover,.search:hover,.dark .search:hover,
+.filter-trigger:hover,.dark .filter-trigger:hover,.active-filters button:hover,.choice-menu:hover{
+  background:hsl(var(--control-hover));border-color:hsl(var(--control-border));
+}
+.search:focus-within,.dark .search:focus-within,
+.filter-trigger[data-state=open],.dark .filter-trigger[data-state=open]{
+  background:hsl(var(--control));border-color:hsl(var(--ring));
+}
+.group-switch button.active,.group-switch button[data-state=on],.view-switch button[data-state=on],
+.dark .group-switch button.active,.dark .group-switch button[data-state=on],.dark .view-switch button[data-state=on]{
+  background:hsl(var(--accent));color:hsl(var(--accent-foreground));
+}
+.collection-tabs button,.dark .collection-tabs button{background:hsl(var(--control));border-color:hsl(var(--control-border))}
+.collection-tabs button:hover{background:hsl(var(--control-hover))}
+.collection-tabs button[data-state=on],.dark .collection-tabs button[data-state=on]{
+  background:hsl(var(--card));border-color:hsl(var(--primary));
+}
+.collection-tabs button>span,.dark .collection-tabs button>span{background:hsl(var(--muted))}
+.collection-tabs button[data-state=on]>span{background:hsl(var(--primary)/.14);color:hsl(var(--primary))}
+
+/* Overlay badges over media: near-opaque dark chip, white text */
+.asset-count{background:#121216f2}
+.play-badge{background:#121216e6}
+.card-favorite,.card-video-btn,.stage-nav,.annotation-toolbar{background:hsl(var(--card));border-color:hsl(var(--control-border))}
+.card-favorite,.card-video-btn{color:hsl(var(--foreground))}
+.viewer-counter,.viewer-save-pill{background:hsl(var(--muted))}
+
+/* Dialog / popover / menu borders stay visible */
+.menu-panel{border-color:hsl(var(--control-border))}
+.dark .menu-panel{background:hsl(var(--popover))}
+
+/* ---- Borderless look: no borders on controls or cards, a faint shadow in light mode, flat hovers ---- */
+.header-right .header-action,.command-search-btn,.search,.filter-trigger,.group-switch,.view-switch,
+.active-filters button,.choice-menu,.collection-tabs button,.collection-tabs button[data-state=on],
+.card-favorite,.card-video-btn,.stage-nav,.annotation-toolbar,.source-card,.study-card,
+.dark .header-right .header-action,.dark .search,.dark .filter-trigger,.dark .group-switch,.dark .view-switch,
+.dark .collection-tabs button,.dark .collection-tabs button[data-state=on],.dark .active-filters button{
+  border-color:transparent!important;
+}
+.header-right .header-action,.command-search-btn,.search,.filter-trigger,.group-switch,.view-switch,
+.active-filters button,.choice-menu,.collection-tabs button,.source-card,.study-card{
+  box-shadow:0 1px 2px #17171c0d;
+}
+.dark .header-right .header-action,.dark .command-search-btn,.dark .search,.dark .filter-trigger,
+.dark .group-switch,.dark .view-switch,.dark .active-filters button,.dark .choice-menu,
+.dark .collection-tabs button,.dark .source-card,.dark .study-card{box-shadow:none}
+.search:focus-within,.filter-trigger[data-state=open]{box-shadow:0 0 0 2px hsl(var(--ring)/.25)}
+.menu-panel,.dark .menu-panel{border-color:transparent}
+.collection-tabs button[data-state=on]{box-shadow:0 1px 2px #17171c0d}
+.dark .collection-tabs button[data-state=on]{box-shadow:none}
+/* Flat hovers: a soft fill change only, no movement */
+.card-favorite:hover,.study-cover .visited:hover,.stage-nav:hover,.viewer-swatch:hover,
+.viewer-strip>button:hover,.cover-options button:hover,.rail-avatar:hover,
+.workspace-identity:hover img,.sidebar .rail-link:hover svg{transform:none}
+.stage-nav:hover{transform:translateY(-50%)}
+.viewer-strip>button:hover .strip-play-badge{transform:translate(-50%,-50%)}
+.viewer-swatch:hover{border-color:transparent}
+
+/* ---- Selected tabs: accent gradient + accent border (explicit exception to the borderless look) ---- */
+.collection-tabs button:not([data-state=on]):hover,.dark .collection-tabs button:not([data-state=on]):hover{
+  background:hsl(var(--primary)/.07);color:hsl(var(--foreground));
+}
+.collection-tabs button[data-state=on],.dark .collection-tabs button[data-state=on]{
+  background:linear-gradient(135deg,hsl(var(--primary)/.16) 0%,hsl(var(--primary)/.04) 100%),hsl(var(--card));
+  border-color:hsl(var(--primary)/.35)!important;
+  color:hsl(var(--foreground));
+}
+
+/* ---- Trash ---- */
+.trash-list{display:flex;flex-direction:column;gap:10px}
+.trash-list>.empty{margin:0 auto}
+.header-action.trash-delete-all:disabled{opacity:.75;color:hsl(var(--foreground)/.7);cursor:not-allowed}
+.header-action.trash-delete-all:not(:disabled):hover{background:hsl(var(--destructive)/.1);color:hsl(var(--destructive))}
+.trash-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px 20px;padding:12px;margin:0;border:0;border-radius:14px;background:hsl(var(--card));box-shadow:0 1px 2px #17171c0d}
+.dark .trash-row{border:0;box-shadow:none}
+.trash-row-info{flex:1 1 280px;min-width:0;gap:16px}
+.trash-thumb{position:relative;width:96px;height:68px;border-radius:10px}
+.trash-kind{position:absolute;left:5px;bottom:5px;padding:1px 6px;border-radius:999px;background:hsl(var(--background)/.85);color:hsl(var(--foreground));font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;backdrop-filter:blur(6px)}
+.trash-row strong{font-size:14px}
+.trash-row-text{min-width:0;display:flex;flex-direction:column;gap:6px}
+.trash-row-meta{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+.trash-row-meta small{margin:0;min-width:0}
+.trash-expiry{flex:none;font-size:11px;font-weight:500;padding:2px 9px;border-radius:999px;background:hsl(var(--muted));color:hsl(var(--muted-foreground))}
+.trash-expiry.urgent{background:hsl(var(--destructive)/.12);color:hsl(var(--destructive))}
+.trash-actions{gap:6px;margin-left:auto}
+.trash-row .trash-restore{background:hsl(var(--primary)/.12);color:hsl(var(--primary));font-weight:600;gap:6px}
+.trash-row .trash-restore:hover:not(:disabled){background:hsl(var(--primary)/.2)}
+.trash-row .trash-icon-btn{width:32px;height:32px;padding:0;color:hsl(var(--muted-foreground))}
+.trash-row .trash-icon-btn:hover:not(:disabled){background:hsl(var(--primary)/.08);color:hsl(var(--foreground))}
+.trash-row .trash-icon-btn.danger:hover:not(:disabled){background:hsl(var(--destructive)/.12);color:hsl(var(--destructive))}
+@media(max-width:700px){.trash-row-info{flex-basis:100%}.trash-actions{margin-left:0;width:100%}.trash-thumb{width:80px;height:58px}}
+.trash-list:has(>.empty){flex:1;justify-content:center;padding:0}
+.trash-list>.empty{margin:0;width:100%}
+.trash-scene .empty-card-thumb{color:hsl(var(--muted-foreground))}
+.trash-scene .empty-card.front{border-color:transparent}
+.trash-scene .empty-badge{border-color:transparent;color:hsl(var(--primary))}

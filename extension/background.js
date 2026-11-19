@@ -1052,19 +1052,35 @@ async function inspectFonts() {
 async function captureArea() {
  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)throw Error('No active tab');
  const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>new Promise(resolve=>{
-  if(document.getElementById('__sightline_selector')){resolve(null);return}
-  const host=document.createElement('div');host.id='__sightline_selector';host.style.cssText='all:initial;display:block;position:fixed;inset:0;z-index:2147483647;cursor:crosshair;touch-action:none;';
-  const shadow=host.attachShadow({mode:'closed'});shadow.innerHTML=`<style>:host{all:initial}.box{position:fixed;border:2px solid #f26628;box-sizing:border-box;background:#f2662810;box-shadow:0 0 0 9999px #0007;pointer-events:none;display:none}.hint{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:10px 14px;border-radius:7px;background:#242426;color:#fff;font:13px system-ui,sans-serif;box-shadow:0 4px 20px #0008;pointer-events:none}</style><div class="box"></div><div class="hint">Drag to select. Hold near an edge to scroll. Esc to cancel.</div>`;
-  const box=shadow.querySelector('.box');document.documentElement.append(host);let origin=null,point=null,frame=0;
-  const update=()=>{if(!origin||!point)return;const x=point.x+scrollX,y=point.y+scrollY,left=Math.min(origin.x,x),top=Math.min(origin.y,y),right=Math.max(origin.x,x),bottom=Math.max(origin.y,y);box.style.display='block';box.style.left=(left-scrollX)+'px';box.style.top=(top-scrollY)+'px';box.style.width=(right-left)+'px';box.style.height=(bottom-top)+'px'};
-  const tick=()=>{if(!origin||!point)return;const speed=point.y<=0?-14:point.y>=innerHeight-1?14:0;if(speed){window.scrollBy(0,speed);update()}frame=requestAnimationFrame(tick)};
-  const cleanup=value=>{cancelAnimationFrame(frame);window.removeEventListener('keydown',onKey,true);window.removeEventListener('scroll',update,true);host.remove();resolve(value)};
-  const onKey=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cleanup(null)}};window.addEventListener('keydown',onKey,true);window.addEventListener('scroll',update,true);
-  host.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();origin={x:e.clientX+scrollX,y:e.clientY+scrollY};point={x:e.clientX,y:e.clientY};host.setPointerCapture(e.pointerId);update();frame=requestAnimationFrame(tick)});
-  host.addEventListener('pointermove',e=>{if(!origin)return;e.preventDefault();point={x:Math.max(0,Math.min(innerWidth,e.clientX)),y:Math.max(0,Math.min(innerHeight,e.clientY))};update()});
-  host.addEventListener('pointerup',e=>{if(!origin)return;e.preventDefault();e.stopPropagation();const x=point.x+scrollX,y=point.y+scrollY;const selection={left:Math.min(origin.x,x),top:Math.min(origin.y,y),width:Math.abs(x-origin.x),height:Math.abs(y-origin.y)};cleanup(selection.width>=2&&selection.height>=2?selection:null)});
-  host.addEventListener('pointercancel',()=>cleanup(null));
- })});
+   const existing=document.getElementById('__sightline_selector');
+   if(existing){try{window.dispatchEvent(new Event('__sightline_selector_cancel'))}catch{}resolve(null);return}
+   const host=document.createElement('div');host.id='__sightline_selector';host.style.cssText='all:initial;display:block;position:fixed;inset:0;z-index:2147483647;cursor:crosshair;touch-action:none;user-select:none;';
+   const shadow=host.attachShadow({mode:'closed'});shadow.innerHTML=`<style>:host{all:initial}.box{position:fixed;border:2px solid #f26628;box-sizing:border-box;background:#f2662810;box-shadow:0 0 0 9999px #0007;pointer-events:none;display:none}.hint{position:fixed;top:18px;left:50%;transform:translateX(-50%);padding:10px 14px;border-radius:7px;background:#242426;color:#fff;font:13px system-ui,sans-serif;box-shadow:0 4px 20px #0008;pointer-events:none}</style><div class="box"></div><div class="hint">Drag to select an area</div>`;
+   const box=shadow.querySelector('.box'),hint=shadow.querySelector('.hint');document.documentElement.append(host);let origin=null,point=null,frame=0,pointerId=null,done=false;
+   const MIN=4;
+   const clampPoint=e=>({x:Math.max(0,Math.min(innerWidth,e.clientX)),y:Math.max(0,Math.min(innerHeight,e.clientY))});
+   const update=()=>{if(!origin||!point)return;const x=point.x+scrollX,y=point.y+scrollY,left=Math.min(origin.x,x),top=Math.min(origin.y,y),right=Math.max(origin.x,x),bottom=Math.max(origin.y,y);box.style.display='block';box.style.left=(left-scrollX)+'px';box.style.top=(top-scrollY)+'px';box.style.width=(right-left)+'px';box.style.height=(bottom-top)+'px'};
+   const tick=()=>{if(!origin||!point)return;const speed=point.y<=0?-14:point.y>=innerHeight-1?14:0;if(speed){window.scrollBy(0,speed);update()}frame=requestAnimationFrame(tick)};
+   const cleanup=value=>{if(done)return;done=true;cancelAnimationFrame(frame);window.removeEventListener('keydown',onKey,true);window.removeEventListener('scroll',update,true);window.removeEventListener('resize',update);window.removeEventListener('__sightline_selector_cancel',onCancel);try{if(pointerId!=null&&host.hasPointerCapture?.(pointerId))host.releasePointerCapture(pointerId)}catch{}host.remove();resolve(value)};
+   const onCancel=()=>cleanup(null);
+   const resetDrag=()=>{cancelAnimationFrame(frame);origin=null;point=null;pointerId=null;box.style.display='none';hint.style.display=''};
+   const finish=()=>{
+    if(!origin||!point)return;
+    const x=point.x+scrollX,y=point.y+scrollY;
+    const selection={left:Math.min(origin.x,x),top:Math.min(origin.y,y),width:Math.abs(x-origin.x),height:Math.abs(y-origin.y)};
+    // A stray click or tiny drag keeps the selector open so the user can try again.
+    if(selection.width<MIN||selection.height<MIN){resetDrag();return}
+    cleanup(selection);
+   };
+   const onKey=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cleanup(null)}};
+   window.addEventListener('keydown',onKey,true);window.addEventListener('scroll',update,true);window.addEventListener('resize',update);window.addEventListener('__sightline_selector_cancel',onCancel);
+   host.addEventListener('pointerdown',e=>{if(e.button!==0||origin)return;e.preventDefault();e.stopPropagation();pointerId=e.pointerId;origin={x:e.clientX+scrollX,y:e.clientY+scrollY};point=clampPoint(e);hint.style.display='none';try{host.setPointerCapture(e.pointerId)}catch{}update();frame=requestAnimationFrame(tick)});
+   host.addEventListener('pointermove',e=>{if(!origin||e.pointerId!==pointerId)return;e.preventDefault();if(e.buttons===0&&e.pointerType==='mouse'){point=clampPoint(e);finish();return}point=clampPoint(e);update()});
+   host.addEventListener('pointerup',e=>{if(!origin||e.pointerId!==pointerId)return;e.preventDefault();e.stopPropagation();point=clampPoint(e);finish()});
+   host.addEventListener('lostpointercapture',e=>{if(origin&&e.pointerId===pointerId&&!done)finish()});
+   host.addEventListener('pointercancel',()=>cleanup(null));
+   host.addEventListener('contextmenu',e=>{e.preventDefault()});
+  })});
  const region=result[0]?.result;if(!region)return;
  try{await captureFullPage(tab,region)}catch(error){await chrome.scripting.executeScript({target:{tabId:tab.id},func:message=>{const notice=document.createElement('div');notice.textContent=`Sightline: ${message}`;notice.style.cssText='all:initial;position:fixed;z-index:2147483647;right:20px;top:20px;max-width:360px;padding:14px 18px;border-radius:8px;background:#29292c;color:#fff;font:13px system-ui;box-shadow:0 8px 30px #0009';document.documentElement.append(notice);setTimeout(()=>notice.remove(),7000)},args:[error.message||String(error)]}).catch(()=>{});throw error}
 

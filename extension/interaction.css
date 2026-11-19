@@ -47,7 +47,7 @@
 .annotation-row-time{flex:none;font-size:10px;color:hsl(var(--muted-foreground));font-variant-numeric:tabular-nums;margin-top:1px}
 .annotation-row-delete{flex:none;width:24px;border:1px solid transparent;border-radius:7px;background:transparent;color:hsl(var(--muted-foreground));font-size:14px;line-height:1;transition:background-color .15s ease,color .15s ease}
 .annotation-row-delete:hover{background:hsl(var(--destructive)/.12);color:hsl(var(--destructive))}
-.annotation-lanes{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow-y:auto;background:hsl(var(--muted)/.6);border-radius:6px;padding:3px;margin-bottom:4px;scrollbar-width:thin;scrollbar-color:hsl(var(--border)) transparent}
+.annotation-lanes{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow-y:auto;background:hsl(var(--muted));border-radius:6px;padding:3px;margin-bottom:4px;scrollbar-width:thin;scrollbar-color:hsl(var(--border)) transparent}
 .annotation-lane{position:relative;height:22px;flex:none;background:hsl(var(--muted));border-radius:4px}
 .annotation-clip{position:absolute;top:1px;height:20px;min-width:6px;overflow:hidden;border:1px solid hsl(var(--input));border-radius:4px;background:hsl(var(--muted));color:hsl(var(--foreground));cursor:grab;touch-action:none}
 .annotation-clip:active{cursor:grabbing}
@@ -79,11 +79,20 @@
 .clip-label{padding:6px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500;cursor:grab}
 .handle.left{left:0}
 .handle.right{right:0}
-.playhead{position:absolute;top:-9px;bottom:-1px;width:16px;background:transparent;pointer-events:auto;z-index:2;margin-left:-7px;cursor:ew-resize;touch-action:none}
-.playhead:before{content:'';position:absolute;top:0;left:3px;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid hsl(var(--primary))}
 .tick:first-child{transform:none}
 .tick:last-child{transform:translateX(-100%)}
-.playhead:after{content:'';position:absolute;top:8px;bottom:0;left:7px;width:2px;background:hsl(var(--primary))}
 .clip-label:active{cursor:grabbing}
 
 .annotation-mark.area,.annotation-draft{box-shadow:none}
+
+.playhead{position:absolute;top:0;left:0;width:0;height:100%;z-index:20;pointer-events:none;touch-action:none;--cap-shift:0px;outline:none}
+.playhead::after{content:'';position:absolute;top:0;bottom:0;left:-1px;width:2px;border-radius:1px;background:hsl(var(--primary));box-shadow:0 0 0 1px hsl(var(--card)/.8)}
+.playhead-cap{position:absolute;top:0;left:0;display:grid;place-items:center;width:16px;height:16px;border-radius:999px;background:hsl(var(--primary));color:hsl(var(--primary-foreground));box-shadow:0 1px 4px #0004;overflow:hidden;pointer-events:auto;cursor:ew-resize;touch-action:none;transform:translateX(-50%);z-index:1;transition:width .15s ease,transform .15s ease,box-shadow .15s ease}
+.playhead-time{font-size:10px;font-weight:600;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:0;transition:opacity .15s ease}
+.playhead-cap:hover,.playhead.dragging .playhead-cap,.playhead:focus-visible .playhead-cap{width:68px;transform:translateX(calc(-50% + var(--cap-shift)));box-shadow:0 2px 8px #0005}
+.playhead-cap:hover .playhead-time,.playhead.dragging .playhead-time,.playhead:focus-visible .playhead-time{opacity:1}
+.playhead:focus-visible .playhead-cap{outline:2px solid hsl(var(--ring));outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.playhead-cap,.playhead-time{transition:none}}.dark .playhead-cap{color:hsl(0 0% 9%)}
+.snap-guide{position:absolute;top:0;left:0;width:0;z-index:19;pointer-events:none}
+.snap-guide[hidden]{display:none}
+.snap-guide::after{content:'';position:absolute;top:0;bottom:0;left:-.5px;width:1px;background:hsl(var(--primary));opacity:.85}

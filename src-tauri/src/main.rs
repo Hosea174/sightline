@@ -96,7 +96,7 @@ fn catalog_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn cache_discover_images(path: &Path) -> Result<(), String> {
     let mut cmd = Command::new("python");
     #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
-    let output = cmd.args(["-c", include_str!("../../scripts/cache-discover-images.py")]).arg(path).output().map_err(|e| e.to_string())?;
+    let output = cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").args(["-c", include_str!("../../scripts/cache-discover-images.py")]).arg(path).output().map_err(|e| e.to_string())?;
     if output.status.success() { Ok(()) } else { Err(format!("Could not cache Discover previews: {}", String::from_utf8_lossy(&output.stderr))) }
 }
 #[tauri::command]
@@ -150,7 +150,7 @@ fn run_discover_refresh(path: &Path) -> Result<String, String> {
     if !path.exists() { return Err("Open Discover once before refreshing".into()); }
     let mut cmd = Command::new("python");
     #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
-    let output = cmd.args(["-c", include_str!("../../scripts/refresh-discover.py")]).arg(path).env("SIGHTLINE_CSS_COLLECTOR", include_str!("../../scripts/discover-css-awards.py")).output()
+    let output = cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").args(["-c", include_str!("../../scripts/refresh-discover.py")]).arg(path).env("SIGHTLINE_CSS_COLLECTOR", include_str!("../../scripts/discover-css-awards.py")).output()
         .map_err(|e| format!("Could not start Python: {e}"))?;
     if !output.status.success() { return Err(format!("Refresh failed: {}", String::from_utf8_lossy(&output.stderr))); }
     let _ = cache_discover_images(path);

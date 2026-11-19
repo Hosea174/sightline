@@ -1,1 +1,1 @@
-{"identifier":"default","description":"Main window","windows":["main"],"permissions":["core:default","dialog:default"]}
+{"identifier":"default","description":"Main window","windows":["main"],"permissions":["core:default","dialog:default","core:window:allow-set-fullscreen","core:window:allow-is-fullscreen"]}

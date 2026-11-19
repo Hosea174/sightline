@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight,
-  Check,
+  Aperture,
   Infinity as InfinityIcon,
   Maximize2,
   Minimize2,
   Minus,
   Plus,
   Shuffle,
-  X,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group';
@@ -29,6 +27,8 @@ import {
   type PlayableCell,
 } from './logic';
 import { useVideoPlayback, VideoPlaybackToggle } from './video/playback';
+import { FilterMenu, type FilterGroup } from './components/FilterMenu';
+import { loadPersisted, savePersisted } from './lib/persistedState';
 
 export const CANVAS_CARD_W = 320;
 export const CANVAS_CARD_H = 180;
@@ -58,6 +58,8 @@ const BG_SUBDIV_X = 28;
 const BG_SUBDIV_Y = 20;
 const DEFAULT_WARP = 15;
 const HOVER_SCROLL_PX_PER_SEC = 120;
+const WARP_STORAGE_KEY = 'sightline-canvas-warp';
+const isWarpValue = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
 
 export type CanvasLibraryItem = {
   kind: 'library';
@@ -97,11 +99,13 @@ type InfiniteCanvasProps = {
   selectedSourceId?: string | null;
   onOpenItem: (item: CanvasItem) => void;
   onItemContextMenu: (e: React.MouseEvent, item: CanvasItem) => void;
-  onSaveDiscover: (item: CanvasDiscoverItem) => void;
   onOpenUrl: (url: string) => void;
   emptyState: React.ReactNode;
-  canSaveToLibrary: boolean;
   loading?: boolean;
+  /** Filter state lives in the parent so it is shared with the toolbar and persisted there. */
+  filterGroups?: FilterGroup[];
+  activeFilterCount?: number;
+  onClearFilters?: () => void;
 };
 
 const WARP_GLSL = `
@@ -433,7 +437,7 @@ function renderSpecialTileCanvas(item: CanvasItem, dark: boolean): HTMLCanvasEle
   ctx.fillRect(0, 0, CANVAS_CARD_W, CANVAS_CARD_H);
 
   const fg = dark ? '#f4f4f5' : '#18181b';
-  const muted = dark ? '#a1a1aa' : '#71717a';
+  const muted = dark ? '#a1a1aa' : '#52525b';
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -457,6 +461,77 @@ function renderSpecialTileCanvas(item: CanvasItem, dark: boolean): HTMLCanvasEle
   return canvas;
 }
 
+const LENS_HANDLE_RADIUS = 7;
+
+/** Loupe-style slider for the canvas lens curvature (0-100). */
+function LensDial({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const setFromPointer = (clientX: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const span = Math.max(1, rect.width - LENS_HANDLE_RADIUS * 2);
+    const next = Math.round(Math.max(0, Math.min(1, (clientX - rect.left - LENS_HANDLE_RADIUS) / span)) * 100);
+    if (next !== value) onChange(next);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const big = e.shiftKey ? 10 : 1;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = value + big;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = value - big;
+    else if (e.key === 'PageUp') next = value + 10;
+    else if (e.key === 'PageDown') next = value - 10;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = 100;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(Math.max(0, Math.min(100, next)));
+  };
+
+  return (
+    <div className={`canvas-lens${dragging ? ' is-dragging' : ''}`} title="Lens curvature">
+      <button type="button" className="canvas-lens-icon-btn" aria-label="Reset lens curvature to 50%" title="Reset lens to 50%" onClick={() => onChange(50)}>
+        <Aperture size={14} className="canvas-lens-icon" aria-hidden="true" />
+      </button>
+      <div
+        ref={trackRef}
+        className="canvas-lens-track"
+        role="slider"
+        tabIndex={0}
+        aria-label="Lens curvature"
+        aria-orientation="horizontal"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        aria-valuetext={`${value}%`}
+        onKeyDown={onKeyDown}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDragging(true);
+          setFromPointer(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (dragging) setFromPointer(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+          setDragging(false);
+        }}
+        onPointerCancel={() => setDragging(false)}
+        onLostPointerCapture={() => setDragging(false)}
+      >
+        <span className="canvas-lens-rail" aria-hidden="true">
+          <span className="canvas-lens-fill" style={{ width: `${value}%` }} />
+        </span>
+        <span className="canvas-lens-handle" aria-hidden="true" style={{ left: `calc(${LENS_HANDLE_RADIUS}px + (100% - ${LENS_HANDLE_RADIUS * 2}px) * ${value / 100})` }} />
+      </div>
+    </div>
+  );
+}
 export function InfiniteCanvas({
   mode,
   onModeChange,
@@ -470,11 +545,12 @@ export function InfiniteCanvas({
   selectedSourceId = null,
   onOpenItem,
   onItemContextMenu,
-  onSaveDiscover,
   onOpenUrl,
   emptyState,
-  canSaveToLibrary,
   loading = false,
+  filterGroups,
+  activeFilterCount = 0,
+  onClearFilters,
 }: InfiniteCanvasProps) {
   const { autoplay } = useVideoPlayback();
   const autoplayRef = useRef(autoplay);
@@ -485,16 +561,7 @@ export function InfiniteCanvas({
   const zoomTextRef = useRef<HTMLSpanElement>(null);
   const lastZoomLabelRef = useRef('100%');
 
-  const [warp, setWarp] = useState(() => {
-    try {
-      const saved = localStorage.getItem('sightline-canvas-warp');
-      if (saved === null || saved.trim() === '') return DEFAULT_WARP;
-      const parsed = Number(saved);
-      return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : DEFAULT_WARP;
-    } catch {
-      return DEFAULT_WARP;
-    }
-  });
+  const [warp, setWarp] = useState(() => loadPersisted<number>(WARP_STORAGE_KEY, DEFAULT_WARP, isWarpValue));
   const warpRef = useRef(warp);
   warpRef.current = warp;
 
@@ -508,10 +575,6 @@ export function InfiniteCanvas({
   const moveSettleTimerRef = useRef<number | null>(null);
   const hoveredCellRef = useRef<{ key: string; col: number; row: number; index: number } | null>(null);
   const hoverScrollRef = useRef<Map<string, number>>(new Map());
-
-  const [lightbox, setLightbox] = useState<CanvasDiscoverItem | null>(null);
-  const lightboxRef = useRef<CanvasDiscoverItem | null>(null);
-  lightboxRef.current = lightbox;
 
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -615,7 +678,6 @@ export function InfiniteCanvas({
 
   // Reset scroll offset cleanly when switching between Library and Discover canvas modes.
   useEffect(() => {
-    setLightbox(null);
     resetView();
   }, [mode, resetView]);
 
@@ -1526,7 +1588,6 @@ export function InfiniteCanvas({
     };
 
     const onWheel = (e: WheelEvent) => {
-      if (lightboxRef.current) return;
       if ((e.target as HTMLElement | null)?.closest('.infinite-canvas-hud')) return;
       if (document.querySelector('[role="dialog"], .overlay')) return;
 
@@ -1581,7 +1642,6 @@ export function InfiniteCanvas({
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (lightboxRef.current) return;
       if ((e.target as HTMLElement | null)?.closest('.infinite-canvas-hud')) return;
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
 
@@ -1606,7 +1666,7 @@ export function InfiniteCanvas({
 
     const onPointerMove = (e: PointerEvent) => {
       if (!activePointers.has(e.pointerId)) {
-        if (activePointers.size === 0 && !isMovingRef.current && !lightboxRef.current) {
+        if (activePointers.size === 0 && !isMovingRef.current) {
           const hit = resolveCellAtPointer(e.clientX, e.clientY);
           const prevKey = hoveredCellRef.current?.key ?? null;
           const nextKey = hit?.key ?? null;
@@ -1729,18 +1789,13 @@ export function InfiniteCanvas({
     };
   }, [clampViewIfNeeded, markMoving, resolveCellAtPointer, zoomAtPoint]);
 
-  // Keyboard shortcuts for zoom, fullscreen, & closing lightbox / restoring header.
+  // Keyboard shortcuts for zoom, fullscreen, & restoring header.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const inInput = target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 
       if (e.key === 'Escape' && !e.defaultPrevented) {
-        if (lightboxRef.current) {
-          e.preventDefault();
-          setLightbox(null);
-          return;
-        }
         if (headerMinimized && !document.querySelector('[role="dialog"], .overlay, [role="menu"]')) {
           e.preventDefault();
           onToggleHeader();
@@ -1748,7 +1803,7 @@ export function InfiniteCanvas({
         }
       }
 
-      if (inInput || lightboxRef.current || document.querySelector('[role="dialog"], .overlay, [role="menu"]')) return;
+      if (inInput || document.querySelector('[role="dialog"], .overlay, [role="menu"]')) return;
 
       if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
         e.preventDefault();
@@ -1793,11 +1848,6 @@ export function InfiniteCanvas({
     [onItemContextMenu, resolveCellAtPointer]
   );
 
-  const liveLightbox = useMemo(
-    () => (lightbox ? items.find((i): i is CanvasDiscoverItem => i.kind === 'discover' && i.id === lightbox.id) || lightbox : null),
-    [lightbox, items]
-  );
-
   return (
     <div
       ref={containerRef}
@@ -1825,63 +1875,60 @@ export function InfiniteCanvas({
             <ToggleGroupItem value="library">Library</ToggleGroupItem>
             <ToggleGroupItem value="discover">Discover</ToggleGroupItem>
           </ToggleGroup>
+          {headerMinimized && filterGroups && onClearFilters && (
+            <FilterMenu
+              compact
+              className="canvas-hud-btn"
+              groups={filterGroups}
+              activeCount={activeFilterCount}
+              onClearAll={onClearFilters}
+            />
+          )}
           <Button
             variant="ghost"
-            size="sm"
-            className={`canvas-hud-action${shuffledActive ? ' active' : ''}`}
+            size="icon"
+            className={`canvas-hud-btn${shuffledActive ? ' active' : ''}`}
             disabled={items.length < 2}
-            title="Shuffle canvas items"
+            title="Shuffle"
             aria-label="Shuffle canvas items"
+            aria-pressed={shuffledActive}
             onClick={onShuffle}
           >
-            <Shuffle size={13} />
-            <span>Shuffle</span>
+            <Shuffle size={14} />
           </Button>
           <Button
             variant="ghost"
-            size="sm"
-            className={`canvas-hud-action${infiniteLoop ? ' active' : ''}`}
+            size="icon"
+            className={`canvas-hud-btn${infiniteLoop ? ' active' : ''}`}
             aria-pressed={infiniteLoop}
-            title={infiniteLoop ? 'Infinite loop is on (click to switch to finite grid)' : 'Infinite loop is off (click to loop infinitely)'}
-            aria-label={infiniteLoop ? 'Turn infinite loop off' : 'Turn infinite loop on'}
+            title={infiniteLoop ? 'Infinite loop on' : 'Infinite loop off'}
+            aria-label="Infinite loop"
             onClick={onToggleInfiniteLoop}
           >
             <InfinityIcon size={14} />
-            <span>Loop</span>
           </Button>
-          <VideoPlaybackToggle className="canvas-hud-action" />
+          {mode !== 'discover' && <VideoPlaybackToggle className="canvas-hud-btn" showLabel={false} />}
         </div>
 
+        <div className="canvas-hud-cluster">
         <div className="canvas-hud-group">
-          <label className="canvas-warp-control" title="WebGL spherical lens curvature">
-            <span>Lens</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={warp}
-              aria-label="WebGL lens curvature"
-              aria-valuetext={`${warp}%`}
-              onChange={(e) => {
-                const value = Number(e.target.value);
-                warpRef.current = value;
-                setWarp(value);
-                wakeRenderRef.current();
-                try {
-                  localStorage.setItem('sightline-canvas-warp', String(value));
-                } catch {}
-              }}
-            />
-            <output>{warp}%</output>
-          </label>
-          <div className="canvas-zoom-controls" aria-label="Canvas zoom controls">
+          <LensDial
+            value={warp}
+            onChange={(value) => {
+              warpRef.current = value;
+              setWarp(value);
+              wakeRenderRef.current();
+              savePersisted(WARP_STORAGE_KEY, value);
+            }}
+          />
+        </div>
+        <div className="canvas-hud-group canvas-zoom-controls" role="group" aria-label="Canvas zoom controls">
             <Button
               variant="ghost"
               size="icon"
               className="canvas-hud-btn"
               aria-label="Zoom out"
-              title="Zoom out (Ctrl -)"
+              title="Zoom out"
               onClick={() => zoomByFactor(1 / 1.2)}
             >
               <Minus size={14} />
@@ -1890,7 +1937,8 @@ export function InfiniteCanvas({
               variant="ghost"
               size="sm"
               className="canvas-zoom-reset"
-              title="Reset view (Ctrl 0)"
+              aria-label="Reset zoom and position"
+              title="Reset view"
               onClick={resetView}
             >
               <span ref={zoomTextRef}>100%</span>
@@ -1900,25 +1948,26 @@ export function InfiniteCanvas({
               size="icon"
               className="canvas-hud-btn"
               aria-label="Zoom in"
-              title="Zoom in (Ctrl +)"
+              title="Zoom in"
               onClick={() => zoomByFactor(1.2)}
             >
               <Plus size={14} />
             </Button>
           </div>
+        <div className="canvas-hud-group">
           <Button
             variant="ghost"
             size="icon"
             className="canvas-hud-btn canvas-fullscreen-btn"
             aria-label={headerMinimized ? 'Exit fullscreen canvas' : 'Fullscreen canvas'}
-            title={headerMinimized ? 'Exit fullscreen (F or Esc)' : 'Fullscreen canvas (F)'}
+            title={headerMinimized ? 'Exit fullscreen' : 'Fullscreen'}
             onClick={onToggleHeader}
           >
             {headerMinimized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </Button>
         </div>
+        </div>
       </div>
-
       {items.length === 0 &&
         (loading ? (
           <div className="infinite-canvas-empty">
@@ -1929,60 +1978,6 @@ export function InfiniteCanvas({
             {emptyState}
           </div>
         ))}
-
-      {liveLightbox && (
-        <div
-          className="canvas-lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={liveLightbox.title}
-          onClick={() => setLightbox(null)}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <div className="canvas-lightbox-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="canvas-lightbox-head">
-              <div className="canvas-lightbox-meta">
-                <strong>{liveLightbox.title}</strong>
-                <span>{liveLightbox.domain}</span>
-              </div>
-              <div className="canvas-lightbox-actions">
-                {canSaveToLibrary && (
-                  <Button
-                    variant={liveLightbox.saved ? 'secondary' : 'outline'}
-                    size="sm"
-                    onClick={() => onSaveDiscover(liveLightbox)}
-                  >
-                    {liveLightbox.saved ? <Check size={14} /> : <Plus size={14} />}
-                    {liveLightbox.saved ? 'In library' : 'Save to library'}
-                  </Button>
-                )}
-                <Button size="sm" onClick={() => onOpenUrl(liveLightbox.url)}>
-                  Open website <ArrowUpRight size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Close preview"
-                  title="Close (Esc)"
-                  onClick={() => setLightbox(null)}
-                >
-                  <X size={18} />
-                </Button>
-              </div>
-            </div>
-            <div className="canvas-lightbox-media">
-              <img src={liveLightbox.imageSrc} alt={liveLightbox.title} draggable={false} />
-            </div>
-            {liveLightbox.tags.length > 0 && (
-              <div className="canvas-lightbox-tags">
-                {liveLightbox.tags.slice(0, 8).map((tag) => (
-                  <span key={tag}>{tag}</span>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

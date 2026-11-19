@@ -100,16 +100,30 @@ function FilterSub({ group }: { group: FilterGroup }) {
   );
 }
 
-export function FilterMenu({ groups, activeCount, onClearAll }: { groups: FilterGroup[]; activeCount: number; onClearAll: () => void }) {
+export function FilterMenu({ groups, activeCount, onClearAll, compact = false, className }: { groups: FilterGroup[]; activeCount: number; onClearAll: () => void; compact?: boolean; className?: string }) {
+  const label = `Filters${activeCount ? ` (${activeCount})` : ''}`;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant={activeCount ? 'secondary' : 'outline'} size="sm" className={activeCount ? 'filter-trigger active' : 'filter-trigger'}>
-          <SlidersHorizontal size={15} />
-          <span>Filters{activeCount ? ` (${activeCount})` : ''}</span>
-        </Button>
+        {compact ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`filter-trigger-compact${activeCount ? ' active' : ''}${className ? ` ${className}` : ''}`}
+            aria-label={label}
+            title={label}
+          >
+            <SlidersHorizontal size={14} />
+            {activeCount > 0 && <span className="filter-trigger-badge" aria-hidden="true">{activeCount}</span>}
+          </Button>
+        ) : (
+          <Button variant={activeCount ? 'secondary' : 'outline'} size="sm" className={activeCount ? 'filter-trigger active' : 'filter-trigger'}>
+            <SlidersHorizontal size={15} />
+            <span>{label}</span>
+          </Button>
+        )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="filter-menu" aria-label="Filters">
+      <DropdownMenuContent align={compact ? 'end' : 'start'} className="filter-menu" aria-label="Filters">
         {groups.map((group) => (
           <FilterSub key={group.key} group={group} />
         ))}
