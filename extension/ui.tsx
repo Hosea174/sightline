@@ -23,11 +23,12 @@ const recording=mode==='review';
 
 type HoverTooltipProps={
  label:string;
+ shortcut?:string;
  side?:'top'|'right'|'bottom'|'left';
  children:React.ReactElement<Record<string,unknown>>;
 };
 
-function HoverTooltip({label,side='top',children}:HoverTooltipProps){
+function HoverTooltip({label,shortcut,side='top',children}:HoverTooltipProps){
  const [open,setOpen]=useState(false);
  return <Tooltip open={open} onOpenChange={()=>{}}>
   <TooltipTrigger asChild>
@@ -39,7 +40,7 @@ function HoverTooltip({label,side='top',children}:HoverTooltipProps){
    })}
   </TooltipTrigger>
   <TooltipContent side={side} className="pointer-events-none extension-tooltip">
-   {label}
+   <span className="tooltip-with-shortcut">{label}{shortcut&&<kbd>{shortcut}</kbd>}</span>
   </TooltipContent>
  </Tooltip>;
 }
@@ -116,21 +117,22 @@ function CustomSelect({
  </>;
 }
 
-type PopupStateDetail={recording?:boolean;shortcuts?:Record<string,string>};
+type PopupStateDetail={recording?:boolean;recordingTitle?:string;shortcuts?:Record<string,string>};
 function Popup(){
- const [popupState,setPopupState]=useState<{recording:boolean;shortcuts:Record<string,string>}>({recording:false,shortcuts:{}});
+ const [popupState,setPopupState]=useState<{recording:boolean;recordingTitle:string;shortcuts:Record<string,string>}>({recording:false,recordingTitle:'',shortcuts:{}});
  useEffect(()=>{
   const onUpdate=(e:Event)=>{
    const detail=(e as CustomEvent<PopupStateDetail>).detail||{};
    setPopupState(prev=>({
     recording:detail.recording??prev.recording,
+    recordingTitle:detail.recordingTitle??prev.recordingTitle,
     shortcuts:detail.shortcuts?{...detail.shortcuts}:prev.shortcuts,
    }));
   };
   const onShortcut=(event:KeyboardEvent)=>{
    if(event.defaultPrevented||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey)return;
    if(event.target instanceof HTMLElement&&event.target.closest('input, textarea, [contenteditable], [role=menu]'))return;
-   const actions:Record<string,string>={s:'screenshot',f:'full-page',a:'area',v:'record',t:'fonts',r:'recordings',k:'shortcuts'};
+   const actions:Record<string,string>={s:'screenshot',f:'full-page',a:'area',v:'record',t:'fonts'};
    const action=actions[event.key.toLowerCase()];
    if(!action)return;
    const button=document.getElementById(action) as HTMLButtonElement|null;
@@ -146,32 +148,26 @@ function Popup(){
   <header className="popup-header"><div className="extension-brand"><img src="icons/icon-48.png" alt=""/><strong>Sightline</strong><Badge variant="secondary">Capture</Badge></div><ThemeToggle/></header>
   <main>
    <div className="tools">
-    <HoverTooltip label="Capture visible tab" side="bottom">
+    <HoverTooltip label="Capture visible tab" shortcut={['S',popupState.shortcuts['capture-visible']].filter(Boolean).join(' / ')} side="bottom">
      <Button id="screenshot" className="capture-primary" aria-label="Capture visible tab"><Camera/><span className="action-label">Capture visible tab</span></Button>
     </HoverTooltip>
     <div className="capture-options">
-     <HoverTooltip label="Capture entire scrolling page" side="top">
+     <HoverTooltip label="Capture entire scrolling page" shortcut="F" side="top">
       <Button variant="ghost" id="full-page" className="capture-option" aria-label="Capture full page"><span className="option-icon"><ScanLine/></span><span><strong>Full page</strong><small>Everything, top to bottom</small></span><ChevronRight/></Button>
      </HoverTooltip>
-     <HoverTooltip label="Capture selected area" side="top">
+     <HoverTooltip label="Capture selected area" shortcut={['A','Ctrl+Alt+D',popupState.shortcuts['capture-area']].filter(Boolean).join(' / ')} side="top">
       <Button variant="ghost" id="area" className="capture-option" aria-label="Capture area"><span className="option-icon"><Scan/></span><span><strong>Select an area</strong><small>Frame only what matters</small></span><ChevronRight/></Button>
      </HoverTooltip>
-     <HoverTooltip label={popupState.recording?'Stop recording':'Record current tab'} side="top">
+     <HoverTooltip label={popupState.recording?(popupState.recordingTitle?`Stop recording "${popupState.recordingTitle}"`:'Stop recording'):'Record current tab'} shortcut={['V',popupState.shortcuts['record-tab']].filter(Boolean).join(' / ')} side="top">
       <Button variant="ghost" id="record" className="capture-option" aria-label={popupState.recording?'Stop recording':'Start recording'}><span className="option-icon"><Video/></span><span><strong className="action-label">Record tab</strong><small>Capture motion &amp; interactions</small></span><ChevronRight/></Button>
+     </HoverTooltip>
+     <HoverTooltip label="Inspect fonts used on this page" shortcut="T" side="top">
+      <Button variant="ghost" id="fonts" className="capture-option" aria-label="Explore page fonts"><span className="option-icon"><Type/></span><span><strong>Explore page fonts</strong><small>Collect webfonts &amp; weights</small></span><ChevronRight/></Button>
      </HoverTooltip>
     </div>
    </div>
-   <div className="popup-secondary"><Separator/>
-    <HoverTooltip label="Inspect fonts used on this page" side="top">
-     <Button variant="ghost" id="fonts" className="capture-option" aria-label="Explore page fonts"><span className="option-icon"><Type/></span><span><strong>Explore page fonts</strong><small>Collect webfonts &amp; weights</small></span><ChevronRight/></Button>
-    </HoverTooltip>
-   </div>
    <section className="popup-results"><div id="fontList"/><p id="status" role="status" aria-live="polite">Captures open in an editor before saving.</p></section>
   </main>
-  <footer className="popup-footer">
-   <HoverTooltip label="Open saved recordings" side="top"><Button variant="ghost" size="sm" id="recordings"><Film/> Recordings</Button></HoverTooltip>
-   <HoverTooltip label="Customize extension shortcuts" side="top"><Button variant="ghost" size="sm" id="shortcuts"><Keyboard/> Shortcuts</Button></HoverTooltip>
-  </footer>
  </div>;
 }
 
@@ -288,6 +284,6 @@ function Editor(){
 mountTitleTooltips();
 flushSync(()=>createRoot(root).render(<TooltipProvider delayDuration={220}>{mode==='popup'?<Popup/>:<Editor/>}</TooltipProvider>));
 // Keep the proven capture and editing engines; their DOM is mounted before they load.
-const scripts=mode==='popup'?['recordings-db.js','popup.js']:mode==='review'?['recordings-db.js','tags.js','brand.js','crop-editor.js','annotations.js','video-export.js','review.js']:['tags.js','brand.js','crop-editor.js','annotations.js','crop.js'];
+const scripts=mode==='popup'?['popup.js']:mode==='review'?['recordings-db.js','tags.js','brand.js','crop-editor.js','annotations.js','video-export.js','review.js']:['tags.js','brand.js','crop-editor.js','annotations.js','crop.js'];
 async function loadEngines(){for(const name of scripts){await new Promise<void>((resolve,reject)=>{const script=document.createElement('script');script.src=new URL(name,document.baseURI).href;script.onload=()=>resolve();script.onerror=()=>reject(Error(`Could not load ${name}`));document.body.append(script)})}}
 void loadEngines().catch(error=>{const status=document.getElementById('status');if(status)status.textContent=`Editor could not start. Reload this page. ${error.message}`});

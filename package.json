@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build && bun run build:extension",
+    "prepare:bundle": "bun run build && node scripts/prepare-bundle.mjs",
     "tauri": "tauri",
     "build:extension": "vite build --config vite.extension.config.ts"
   },
@@ -23,6 +24,8 @@
     "@radix-ui/react-tooltip": "^1.4.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "@xyflow/react": "^12.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

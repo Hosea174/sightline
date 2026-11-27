@@ -35,7 +35,7 @@ assert.equal(save.disabled,false);
 assert.match(nodes.status.textContent,/Bridge unavailable/);
 failSave=false;
 await save.onclick();
-assert.equal(save.textContent,'Saved');
+assert.equal(save.textContent,'Installed');
 await nodes.record.onclick();
 assert.equal(nodes.record.parts['.action-label'].textContent,'Stop recording');
 await nodes.record.onclick();
@@ -110,7 +110,7 @@ assert.equal(unavailableRow.children[1].textContent,'File unavailable');
 
 // Save single variant first, then Save all should fail cleanly on failing 700i and recover on retry
 await sgRow.children[1].onclick();
-assert.equal(sgRow.children[1].textContent,'Saved');
+assert.equal(sgRow.children[1].textContent,'Installed');
 assert.deepEqual(JSON.parse(JSON.stringify(savedPayloads[0])),{
   type:'save-font',
   file:'https://cdn.example/sg-400.woff2',
@@ -135,17 +135,59 @@ assert.equal(savedPayloads.length,1);
 
 failUrl='';
 await sgRow.children[3].onclick();
-assert.equal(sgRow.children[2].textContent,'Saved');
-assert.equal(sgRow.children[3].textContent,'Saved all');
+assert.equal(sgRow.children[2].textContent,'Installed');
+assert.equal(sgRow.children[3].textContent,'Installed all');
 assert.equal(savedPayloads.length,2);
 assert.equal(savedPayloads[1].weight,700);
 assert.equal(savedPayloads[1].style,'italic');
 assert.equal(savedPayloads[1].extension,'woff2');
 
 await interRow.children[1].onclick();
-assert.equal(interRow.children[1].textContent,'Saved');
+assert.equal(interRow.children[1].textContent,'Installed');
 assert.equal(savedPayloads[2].isVariable,true);
 assert.equal(savedPayloads[2].weightMin,200);
 assert.equal(savedPayloads[2].weightMax,800);
+
+// Partial font save (saved locally, Windows install failed) should not misreport Installed all
+const chromeInstallErr={commands:{getAll:cb=>cb([])},tabs:{create(){}},runtime:{
+  getURL:x=>x,
+  async sendMessage(message){
+    if(message.type==='recording-status')return {recording:false};
+    if(message.type==='find-fonts')return {title:'Page',url:'https://example.com',fonts:[{name:'LocalErr',files:['https://cdn.example/a.woff2','https://cdn.example/b.woff2']}]};
+    if(message.type==='save-font')return {ok:true,installError:'Bridge outdated'};
+    return {};
+  }
+}};
+const nodesErr=Object.fromEntries(ids.map(id=>[id,new Element()]));
+nodesErr.record.parts={'.action-label':new Element(),small:new Element()};
+const mainErr=new Element(),controlsErr=['record','screenshot','full-page','area','fonts','recordings'].map(id=>nodesErr[id]);
+const docErr={getElementById:id=>nodesErr[id],querySelector:()=>mainErr,querySelectorAll:()=>controlsErr,createElement:()=>new Element()};
+vm.runInNewContext(fs.readFileSync('extension/popup.js','utf8'),{document:docErr,chrome:chromeInstallErr,URL,listRecordings:async()=>[]});
+await nodesErr.fonts.onclick();
+const errRow=nodesErr.fontList.children[0];
+await errRow.children[3].onclick();
+assert.equal(errRow.children[1].textContent,'Saved');
+assert.equal(errRow.children[2].textContent,'Saved');
+assert.equal(errRow.children[3].textContent,'Saved all');
+assert.equal(errRow.children[3].disabled,true);
+assert.match(nodesErr.status.textContent,/installation failed/i);
+
+// Cross-tab recording status identifies the recording tab instead of misleading about the active tab
+const chromeOtherTab={commands:{getAll:cb=>cb([])},tabs:{create(){},query:async()=>[{id:1,title:'Current tab'}]},runtime:{
+  getURL:x=>x,
+  async sendMessage(message){
+    if(message.type==='recording-status')return {recording:true,tabId:99,title:'Stripe'};
+    return {};
+  }
+}};
+const nodesOther=Object.fromEntries(ids.map(id=>[id,new Element()]));
+nodesOther.record.parts={'.action-label':new Element(),small:new Element()};
+const mainOther=new Element(),controlsOther=['record','screenshot','full-page','area','fonts','recordings'].map(id=>nodesOther[id]);
+const docOther={getElementById:id=>nodesOther[id],querySelector:()=>mainOther,querySelectorAll:()=>controlsOther,createElement:()=>new Element()};
+vm.runInNewContext(fs.readFileSync('extension/popup.js','utf8'),{document:docOther,chrome:chromeOtherTab,URL,listRecordings:async()=>[]});
+await new Promise(setImmediate);
+assert.equal(nodesOther.record.parts['.action-label'].textContent,'Stop recording');
+assert.equal(nodesOther.record.parts.small.textContent,'Recording "Stripe"');
+assert.equal(nodesOther.record.attrs['aria-label'],'Stop recording "Stripe"');
 
 console.log('Popup font retry, busy recovery, multi-variant metadata, and recording controls passed.');

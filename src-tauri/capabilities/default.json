@@ -1,1 +1,1 @@
-{"identifier":"default","description":"Main window","windows":["main"],"permissions":["core:default","dialog:default","core:window:allow-set-fullscreen","core:window:allow-is-fullscreen"]}
+{"$schema":"../gen/schemas/desktop-schema.json","identifier":"default","description":"Main window","windows":["main"],"permissions":["core:default","dialog:default","updater:default","process:default","process:allow-restart","core:window:allow-set-fullscreen","core:window:allow-is-fullscreen"]}

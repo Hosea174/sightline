@@ -24,11 +24,103 @@ export function colorDistance(a:string,b:string):number {
   const x=rgb(a),y=rgb(b);
   return Math.hypot(x[0]-y[0],x[1]-y[1],x[2]-y[2]);
 }
+function foldTagSeparators(value:string):string {
+  return value.toLowerCase().replace(/[-_\s/.]+/g,' ').trim();
+}
+function compactTagText(value:string):string {
+  return value.toLowerCase().replace(/[-_\s/.]+/g,'');
+}
+function isOrderedSubsequence(haystack:string,needle:string):boolean {
+  if(!needle)return true;
+  let i=0;
+  for(const c of haystack){
+    if(c===needle[i]){
+      i++;
+      if(i===needle.length)return true;
+    }
+  }
+  return false;
+}
+function scoreSubsequence(rawCandidate:string,compactCandidate:string,compactQuery:string):number {
+  const isWordStart:boolean[]=[];
+  const lower=rawCandidate.toLowerCase();
+  for(let idx=0;idx<lower.length;idx++){
+    if(!/[-_\s/.]/.test(lower[idx])){
+      isWordStart.push(idx===0||/[-_\s/.]/.test(lower[idx-1]));
+    }
+  }
+  const positions:number[]=[];
+  let qi=0;
+  for(let ci=0;ci<compactCandidate.length&&qi<compactQuery.length;ci++){
+    if(compactCandidate[ci]===compactQuery[qi]){
+      positions.push(ci);
+      qi++;
+    }
+  }
+  if(qi<compactQuery.length)return 0;
+  let boundaryHits=0,consecutive=0,maxConsecutive=0;
+  for(let i=0;i<positions.length;i++){
+    if(isWordStart[positions[i]])boundaryHits++;
+    if(i>0&&positions[i]===positions[i-1]+1){
+      consecutive++;
+      if(consecutive>maxConsecutive)maxConsecutive=consecutive;
+    }else{
+      consecutive=1;
+      if(maxConsecutive===0)maxConsecutive=1;
+    }
+  }
+  const firstIdx=positions[0]??0;
+  const lastIdx=positions[positions.length-1]??0;
+  const span=lastIdx-firstIdx+1;
+  const gapPenalty=Math.max(0,span-compactQuery.length);
+  const rawScore=400+Math.min(150,boundaryHits*25)+Math.min(120,maxConsecutive*18)-Math.min(120,gapPenalty*4)-Math.min(40,firstIdx*2);
+  return Math.max(1,rawScore);
+}
+/** Scores how closely a candidate tag or filter label matches a query, ignoring omitted hyphens or separators. */
+export function scoreTagMatch(candidate:string,query:string):number {
+  const rawQuery=query.trim().toLowerCase();
+  if(!rawQuery)return 0;
+  const rawCand=candidate.toLowerCase();
+  const foldedCand=foldTagSeparators(rawCand);
+  const foldedQuery=foldTagSeparators(rawQuery);
+  const compactCand=compactTagText(rawCand);
+  const compactQuery=compactTagText(rawQuery);
+  if(!compactQuery)return rawCand.includes(rawQuery)?500:0;
+  if(rawCand===rawQuery)return 1000;
+  if(foldedCand===foldedQuery)return 960;
+  if(compactCand===compactQuery)return 950;
+  if(rawCand.startsWith(rawQuery))return 900;
+  if(foldedCand.startsWith(foldedQuery))return 860;
+  if(compactCand.startsWith(compactQuery))return 840;
+  const words=foldedCand.split(' ').filter(Boolean);
+  if(words.some(w=>w.startsWith(foldedQuery)||w.startsWith(compactQuery)))return 800;
+  if(rawCand.includes(rawQuery))return 750;
+  if(foldedCand.includes(foldedQuery))return 720;
+  if(compactCand.includes(compactQuery))return 700;
+  return scoreSubsequence(rawCand,compactCand,compactQuery);
+}
+/** Returns known tags matching a query (excluding already-selected tags), ranked by match quality. */
+export function filterTagSuggestions(knownTags:readonly string[],query:string,excludedTags:readonly string[]=[]):string[] {
+  if(!query.trim())return [];
+  const excluded=new Set(excludedTags.map(t=>t.toLowerCase()));
+  const scored:{tag:string;score:number}[]=[];
+  for(const tag of knownTags){
+    if(excluded.has(tag.toLowerCase()))continue;
+    const score=scoreTagMatch(tag,query);
+    if(score>0)scored.push({tag,score});
+  }
+  scored.sort((a,b)=>b.score-a.score||a.tag.localeCompare(b.tag));
+  return scored.map(item=>item.tag);
+}
 export function matches(value:string,query:string):boolean {
   const hay=value.toLowerCase(),needle=query.trim().toLowerCase();
+  if(!needle)return true;
   if(hay.includes(needle))return true;
-  let i=0;for(const c of hay)if(c===needle[i])i++;
-  return i===needle.length;
+  const foldedHay=foldTagSeparators(hay),foldedNeedle=foldTagSeparators(needle);
+  if(foldedNeedle&&foldedHay.includes(foldedNeedle))return true;
+  const compactHay=compactTagText(hay),compactNeedle=compactTagText(needle);
+  if(compactNeedle&&(compactHay.includes(compactNeedle)||isOrderedSubsequence(compactHay,compactNeedle)))return true;
+  return isOrderedSubsequence(hay,needle);
 }
 
 export function setTrash<T extends {id:string;trashedAt?:string;assets:A[]},A extends {id:string;trashedAt?:string}>(sources:T[],sourceId:string,assetId:string|undefined,trashedAt:string|undefined):T[]{
@@ -914,7 +1006,7 @@ export function filterDiscoverSites<T extends DiscoverSiteLike>(
           return y !== null && filters.years.includes(y);
         }) ||
         (filters.years.includes('Unknown') && !s.sources.some((x) => discoverSourceYear(x.date)))) &&
-      (!q || [s.title, s.url, ...s.tags, ...s.sources.map((x) => x.name)].some((x) => x.toLowerCase().includes(q)))
+      (!q || [s.title, s.url, ...s.tags, ...s.sources.map((x) => x.name)].some((x) => matches(x, q)))
   );
 }
 

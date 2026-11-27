@@ -64,11 +64,11 @@
   border-color:transparent!important;
 }
 .header-right .header-action,.command-search-btn,.search,.filter-trigger,.group-switch,.view-switch,
-.active-filters button,.choice-menu,.collection-tabs button,.source-card,.study-card{
+.active-filters button,.collection-tabs button,.source-card,.study-card{
   box-shadow:0 1px 2px #17171c0d;
 }
 .dark .header-right .header-action,.dark .command-search-btn,.dark .search,.dark .filter-trigger,
-.dark .group-switch,.dark .view-switch,.dark .active-filters button,.dark .choice-menu,
+.dark .group-switch,.dark .view-switch,.dark .active-filters button,
 .dark .collection-tabs button,.dark .source-card,.dark .study-card{box-shadow:none}
 .search:focus-within,.filter-trigger[data-state=open]{box-shadow:0 0 0 2px hsl(var(--ring)/.25)}
 .menu-panel,.dark .menu-panel{border-color:transparent}

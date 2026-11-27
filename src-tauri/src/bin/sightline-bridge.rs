@@ -1,3 +1,5 @@
+#[path = "../font_install.rs"]
+mod font_install;
 use serde_json::{json, Value};
 use std::{fs::{self, File}, io::{self, Read, Write}, path::{Path, PathBuf}, process::Command};
 #[cfg(windows)] use std::os::windows::process::CommandExt;
@@ -20,8 +22,14 @@ fn library_config() -> Result<(PathBuf,PathBuf),Box<dyn std::error::Error>> {
  Ok((library,inbox))
 }
 fn ffmpeg_program() -> PathBuf {
- if let Some(paths)=std::env::var_os("PATH") { for dir in std::env::split_paths(&paths) { let exe=dir.join(if cfg!(windows){"ffmpeg.exe"}else{"ffmpeg"}); if exe.is_file(){return exe} } }
- if let Some(local)=std::env::var_os("LOCALAPPDATA") { let packages=PathBuf::from(local).join("Microsoft").join("WinGet").join("Packages"); if let Ok(entries)=fs::read_dir(packages) { for entry in entries.flatten() { if entry.file_name().to_string_lossy().starts_with("Gyan.FFmpeg_") { if let Ok(builds)=fs::read_dir(entry.path()) { for build in builds.flatten() {let exe=build.path().join("bin").join("ffmpeg.exe");if exe.is_file(){return exe}} } } } } }
+ let exe_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+ if let Some(paths)=std::env::var_os("PATH") { for dir in std::env::split_paths(&paths) { let exe=dir.join(exe_name); if exe.is_file(){return exe} } }
+ if let Some(local)=std::env::var_os("LOCALAPPDATA") {
+  let managed=PathBuf::from(&local).join("Sightline").join("tools").join("ffmpeg").join(exe_name);
+  if managed.is_file(){return managed}
+  let packages=PathBuf::from(local).join("Microsoft").join("WinGet").join("Packages");
+  if let Ok(entries)=fs::read_dir(packages) { for entry in entries.flatten() { if entry.file_name().to_string_lossy().starts_with("Gyan.FFmpeg_") { if let Ok(builds)=fs::read_dir(entry.path()) { for build in builds.flatten() {let exe=build.path().join("bin").join("ffmpeg.exe");if exe.is_file(){return exe}} } } } }
+ }
  PathBuf::from("ffmpeg")
 }
 fn render_video(input:&Path, output:&Path, segments:&[(f64,f64)], crop:Option<(f64,f64,f64,f64)>) -> Result<(),Box<dyn std::error::Error>> {
@@ -355,7 +363,10 @@ fn run_with_io<R: Read, W: Write>(input: &mut R, output: &mut W, library: &Path,
     cleanup.temp_manifest = None;
     cleanup.committed = true;
     cleanup.committed_media = None;
-    reply_to(output, json!({"ok": true, "id": id}))?;
+    let install_error = if capture_kind == "font" {
+     font_install::install(&final_path, manifest["name"].as_str().unwrap_or("Font")).err()
+    } else { None };
+    reply_to(output, json!({"ok": true, "id": id, "installed": capture_kind == "font" && install_error.is_none(), "installError": install_error}))?;
     break;
    }
    _ => return Err("Invalid capture request".into()),

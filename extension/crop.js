@@ -34,7 +34,8 @@ async function confirmAction(opts){
  if(typeof window.sightlineConfirm==='function')return await window.sightlineConfirm(opts);
  return confirm(opts.description||opts.title);
 }
-['title','url','notes','category'].forEach(id=>{const el=document.getElementById(id);if(el){el.addEventListener('input',()=>{if(loaded)dirty=true});el.addEventListener('change',()=>{if(loaded)dirty=true})}});
+function syncDocumentTitle(){const title=document.getElementById('title')?.value?.trim()||'';document.title=title?`${title} — Sightline`:'Sightline Editor'}
+['title','url','notes','category','tags'].forEach(id=>{const el=document.getElementById(id);if(el){el.addEventListener('input',()=>{if(loaded)dirty=true;if(id==='title')syncDocumentTitle()});el.addEventListener('change',()=>{if(loaded)dirty=true;if(id==='title')syncDocumentTitle()})}});
 const tagPills=document.getElementById('tag-pills');
 if(tagPills&&typeof MutationObserver!=='undefined'){new MutationObserver(()=>{if(loaded)dirty=true}).observe(tagPills,{childList:true})}
 window.addEventListener('pointerdown',e=>{const active=document.activeElement;if(!isTextEntry(active))return;const t=e.target;if(t instanceof Element&&t.closest('input:not([type="range"]),textarea,select,.tags-field,.tag-suggestions,.annotation-editor,[contenteditable="true"]'))return;if(active instanceof HTMLElement)active.blur()},true);
@@ -64,10 +65,65 @@ chrome.storage.local.get(['cropId','cropImage','cropTitle','cropUrl','cropFull',
  metadata=v;
  await loadSourceDefaults(v.cropUrl);
  document.getElementById('title').value=v.cropTitle||'';
+ syncDocumentTitle();
  document.getElementById('url').value=v.cropUrl||'';
  image.src=v.cropImage||'';
  setTimeout(()=>{loaded=true},100);
 });
 image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;ctx.drawImage(image,0,0);editor.reset();save.disabled=false};
 image.onerror=()=>status.textContent='The image could not be loaded.';
-save.onclick=async()=>{if(annotations.hasOmitted()&&!await confirmAction({title:'Save with omitted annotations?',description:'Some annotations are outside the crop and will not be saved. Continue?',confirmLabel:'Continue',destructive:false}))return;save.disabled=true;const r=editor.get(),full=editor.isFull();status.textContent='Saving…';try{let data=metadata.cropImage;if(!full){const out=document.createElement('canvas');out.width=Math.max(1,Math.round(r.w*canvas.width));out.height=Math.max(1,Math.round(r.h*canvas.height));out.getContext('2d').drawImage(image,r.x*canvas.width,r.y*canvas.height,r.w*canvas.width,r.h*canvas.height,0,0,out.width,out.height);data=out.toDataURL('image/png')}const result=await chrome.runtime.sendMessage({type:'save-area',data,extension:full?metadata.cropExtension:'png',name:full?metadata.cropName:'',title:document.getElementById('title').value.trim(),url:document.getElementById('url').value.trim(),annotations:annotations.export(),tags:window.captureTags.values(),notes:document.getElementById('notes').value,category:document.getElementById('category').value});if(result?.error)throw Error(result.error);dirty=false;status.textContent='';showToast('Capture saved',result?.id?'Open it or find it in Sightline.':'Sightline will import it while open.',result?.id?{actionLabel:'Open capture',onAction:async()=>{const openRes=await chrome.runtime.sendMessage({type:'open-asset',id:result.id});if(openRes?.error)throw Error(openRes.error)}}:undefined);const latest=await chrome.storage.local.get(['cropId']);if(!metadata.cropId||latest.cropId===metadata.cropId)await chrome.storage.local.remove(['cropId','cropImage','cropTitle','cropUrl','cropFull','cropExtension','cropName'])}catch(e){status.textContent='';showToast('Could not save capture',String(e),true)}finally{save.disabled=false}};
+let saving=false,lastSavedSignature=null,lastSavedId=null;
+function captureEdits(commitTags=true){
+ return {
+  crop:editor.isFull()?null:editor.get(),
+  title:document.getElementById('title').value.trim(),
+  url:document.getElementById('url').value.trim(),
+  category:document.getElementById('category').value,
+  tags:window.captureTags.values(commitTags),
+  notes:document.getElementById('notes').value,
+  annotations:annotations.export(),
+ };
+}
+save.onclick=async()=>{
+ if(saving||save.disabled)return;
+ saving=true;
+ try{
+  const {crop,...fields}=captureEdits();
+  const saveSig=JSON.stringify({crop,...fields});
+  if(lastSavedSignature!==null&&saveSig===lastSavedSignature){
+   dismissToast?.(true);
+   if(!await confirmAction({title:'Already saved',description:'No changes were made since you last saved this capture. Save another copy anyway?',confirmLabel:'Save copy',destructive:false})){
+    showSavedAssetToast('capture',lastSavedId,true);
+    return;
+   }
+  }
+  if(annotations.hasOmitted()&&!await confirmAction({title:'Save with omitted annotations?',description:'Some annotations are outside the crop and will not be saved. Continue?',confirmLabel:'Continue',destructive:false}))return;
+  save.disabled=true;
+  status.textContent='Saving…';
+  let data=metadata.cropImage;
+  if(crop){
+   const r=crop;
+   const out=document.createElement('canvas');
+   out.width=Math.max(1,Math.round(r.w*canvas.width));
+   out.height=Math.max(1,Math.round(r.h*canvas.height));
+   out.getContext('2d').drawImage(image,r.x*canvas.width,r.y*canvas.height,r.w*canvas.width,r.h*canvas.height,0,0,out.width,out.height);
+   data=out.toDataURL('image/png');
+  }
+  const result=await chrome.runtime.sendMessage({type:'save-area',data,extension:crop?'png':metadata.cropExtension,name:crop?'':metadata.cropName,...fields});
+  if(!result)throw Error('No response from Sightline. Reload the extension and try again.');
+  if(result.error)throw Error(result.error);
+  dirty=Boolean(document.getElementById('tags').value.trim())||JSON.stringify(captureEdits(false))!==saveSig;
+  lastSavedSignature=saveSig;lastSavedId=result.id;status.textContent='';
+  showSavedAssetToast('capture',result.id);
+  try{
+   const latest=await chrome.storage.local.get(['cropId']);
+   if(!metadata.cropId||latest.cropId===metadata.cropId)await chrome.storage.local.remove(['cropId','cropImage','cropTitle','cropUrl','cropFull','cropExtension','cropName']);
+  }catch{}
+ }catch(e){
+  status.textContent='';
+  showToast('Could not save capture',e.message||String(e),{tone:'error'});
+ }finally{
+  saving=false;
+  save.disabled=false;
+ }
+};

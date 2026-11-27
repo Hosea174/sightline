@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {sameInstagramPost,inspirationUrlKey,sameSource,colorDistance,matches,setTrash,displayUrl,groupSourcesByUrl,toggleFavorite,zoomAround,paginationPages,shuffled,shuffleRank,matchesIndustry,matchesReference,safeHttpUrl,sanitizeFolderName,sourceFolder,renameFolderReferences,CANVAS_MIN_ZOOM,CANVAS_MAX_ZOOM,clampCanvasZoom,computeCanvasGrid,wrapGridIndex,finiteGridIndex,clampFiniteCanvasView,getVisibleCellRange,pickPlayableCells,isFontFilename,parseFontFilenameMeta,buildGoogleFontsCss2Url,groupFontAssets,capturedFontAssetFields,getFontFaceWeightDescriptor,getAvailableFontWeightPills} from './src/logic';
+import {sameInstagramPost,inspirationUrlKey,sameSource,colorDistance,matches,scoreTagMatch,filterTagSuggestions,filterDiscoverSites,setTrash,displayUrl,groupSourcesByUrl,toggleFavorite,zoomAround,paginationPages,shuffled,shuffleRank,matchesIndustry,matchesReference,safeHttpUrl,sanitizeFolderName,sourceFolder,renameFolderReferences,CANVAS_MIN_ZOOM,CANVAS_MAX_ZOOM,clampCanvasZoom,computeCanvasGrid,wrapGridIndex,finiteGridIndex,clampFiniteCanvasView,getVisibleCellRange,pickPlayableCells,isFontFilename,parseFontFilenameMeta,buildGoogleFontsCss2Url,groupFontAssets,capturedFontAssetFields,getFontFaceWeightDescriptor,getAvailableFontWeightPills} from './src/logic';
 
 test('individual assets retain source notes and tags while matching their own context',()=>{
  const source={title:'Studio',url:'https://example.com',notes:'Editorial layout',tags:['Reference']};
@@ -700,4 +700,36 @@ test('page sizes are whole rows for the view columns',()=>{
   for(const c of [1,2,3,4,5,6,7,8])for(const n of pageSizeOptions(c))expect(n%c).toBe(0);
   expect(snapPageSize(30,6)).toBe(30);expect(snapPageSize(30,7)).toBe(28);expect(snapPageSize(102,6)).toBe(102);
   expect(gridColumnsCss('compact')).toContain('/6)');expect(gridColumnsCss('list')).toBeUndefined();
+});
+
+test('tag autocomplete and discover search match hyphenated tags when hyphens are omitted',()=>{
+  expect(matches('e-commerce','ecommerce')).toBe(true);
+  expect(matches('case-study','case study')).toBe(true);
+  expect(matches('micro-interactions','mcintr')).toBe(true);
+
+  const known=['ecommerce-ui','e-commerce','case-study','micro-interactions','Editorial'];
+  expect(filterTagSuggestions(known,'ecommerce')).toEqual(['e-commerce','ecommerce-ui']);
+  expect(filterTagSuggestions(known,'ecommerce',['e-commerce'])).toEqual(['ecommerce-ui']);
+  expect(filterTagSuggestions(known,'casestudy')).toEqual(['case-study']);
+  expect(filterTagSuggestions(known,'case study')).toEqual(['case-study']);
+  expect(filterTagSuggestions(known,'mcintr')).toEqual(['micro-interactions']);
+  expect(filterTagSuggestions(known,'   ')).toEqual([]);
+  expect(scoreTagMatch('e-commerce','ecommerce')).toBeGreaterThan(scoreTagMatch('ecommerce-ui','ecommerce'));
+
+  const sites=[
+    {title:'Storefront',url:'https://store.example',tags:['e-commerce'],sources:[{name:'Awwwards',date:'2026-01-01'}]},
+    {title:'Portfolio',url:'https://studio.example',tags:['case-study'],sources:[{name:'Lapa',date:'2026-01-01'}]},
+  ];
+  const filtered=filterDiscoverSites(sites,{
+    query:'ecommerce',
+    colors:[],
+    years:[],
+    sources:[],
+    industries:[],
+    tags:[],
+    statuses:[],
+    visited:{},
+    paletteSwatches:[],
+  });
+  expect(filtered.map(s=>s.title)).toEqual(['Storefront']);
 });

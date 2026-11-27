@@ -19,7 +19,7 @@ import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Textarea } from './components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
-import { displayUrl, getFileExtension, safeHttpUrl } from './logic';
+import { displayUrl, filterTagSuggestions, getFileExtension, safeHttpUrl } from './logic';
 import { Annotation, Asset, CATEGORIES } from './types';
 
 export type StagedInspirationAsset = {
@@ -89,19 +89,20 @@ function TagInputField({
   const [input, setInput] = useState('');
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const options = dismissed
-    ? []
-    : knownTags.filter(
-        (t) =>
-          input.trim() &&
-          t.toLowerCase().includes(input.trim().toLowerCase()) &&
-          !tags.some((x) => x.toLowerCase() === t.toLowerCase())
-      );
+  const listRef = useRef<HTMLDivElement>(null);
+  const options = dismissed ? [] : filterTagSuggestions(knownTags, input, tags);
+  const safeActive = options.length ? Math.min(active, options.length - 1) : -1;
+
+  useEffect(() => {
+    if (safeActive < 0) return;
+    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [safeActive, options.length]);
 
   const addTag = (value: string) => {
     const clean = value.trim();
-    if (clean && !tags.some((t) => t.toLowerCase() === clean.toLowerCase())) {
-      onChange([...tags, clean]);
+    const canonical = knownTags.find((t) => t.toLowerCase() === clean.toLowerCase()) || clean;
+    if (canonical && !tags.some((t) => t.toLowerCase() === canonical.toLowerCase())) {
+      onChange([...tags, canonical]);
     }
     setInput('');
     setActive(0);
@@ -138,16 +139,16 @@ function TagInputField({
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown' && options.length) {
               e.preventDefault();
-              setActive((active + 1) % options.length);
+              setActive((Math.max(0, safeActive) + 1) % options.length);
             } else if (e.key === 'ArrowUp' && options.length) {
               e.preventDefault();
-              setActive((active + options.length - 1) % options.length);
+              setActive((Math.max(0, safeActive) + options.length - 1) % options.length);
             } else if (e.key === 'Escape' && options.length) {
               e.preventDefault();
               setDismissed(true);
             } else if (['Enter', 'Tab', ','].includes(e.key) && input.trim()) {
               e.preventDefault();
-              addTag(options[active] || input);
+              addTag(e.key === ',' ? input : (safeActive >= 0 ? options[safeActive] : undefined) || input);
             } else if (e.key === 'Backspace' && !input && tags.length) {
               onChange(tags.slice(0, -1));
             }
@@ -159,13 +160,13 @@ function TagInputField({
         />
       </div>
       {options.length > 0 && (
-        <div className="viewer-tag-suggestions" role="listbox">
+        <div ref={listRef} className="viewer-tag-suggestions" role="listbox">
           {options.map((tag, i) => (
             <Button
               variant="ghost"
               type="button"
               role="option"
-              aria-selected={i === active}
+              aria-selected={i === safeActive}
               key={tag}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => addTag(tag)}

@@ -9,6 +9,7 @@ const chrome={runtime:{onMessage:{addListener(fn){listener=fn}},connectNative},c
 const call=msg=>new Promise(resolve=>listener(msg,null,resolve));const tagResult=await call({type:'library-tags'});assert.equal(tagResult.tags.join(','),'Editorial,Motion');const saved=await call({type:'save-clip',data:'blob:test',title:'Test site',url:'https://example.com',tags:['Motion'],category:'Web design',segments:[{start:.2,end:1.2},{start:1.8,end:2.4}]});assert.equal(saved.ok,true,JSON.stringify(saved));const manifestFile=fs.readdirSync(inbox).find(x=>x.endsWith('.json'));assert.ok(manifestFile);const metadata=JSON.parse(fs.readFileSync(path.join(inbox,manifestFile)));assert.equal(metadata.tags[0],'Motion');assert.ok(fs.statSync(path.join(inbox,metadata.file)).size>0);assert.ok(fs.existsSync(original));
 const savedFont=await call({type:'save-font',file:'blob:font-test',extension:'woff2',title:'Test site',url:'https://example.com',name:'Inter 300-700',family:'Inter',weight:400,weightMin:300,weightMax:700,isVariable:true,style:'normal',fontSource:'capture'});
 assert.equal(savedFont.ok,true,JSON.stringify(savedFont));
+assert.ok(savedFont.installError, 'A saved invalid font must report that installation failed');
 const fontManifestFile=fs.readdirSync(inbox).find(x=>x.endsWith('.json')&&x!==manifestFile);
 assert.ok(fontManifestFile);
 const fontMeta=JSON.parse(fs.readFileSync(path.join(inbox,fontManifestFile)));

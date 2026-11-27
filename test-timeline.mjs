@@ -4,20 +4,22 @@ class ClassList{constructor(){this.set=new Set()}toggle(k,f){if(f===undefined){i
 class El{constructor(id=''){this.id=id;this.style={};this.dataset={};this.value='';this.children=[];this._text='';this.paused=true;this.currentTime=0;this.playbackRate=1;this.duration=10;this.videoWidth=160;this.videoHeight=90;this.tagName='DIV';this.attrs={};this.listeners={};this.classList=new ClassList()}set textContent(value){this._text=value;this.children=[]}get textContent(){return this._text}append(el){this.children.push(el)}setAttribute(k,v){this.attrs[k]=v}getAttribute(k){return this.attrs[k]}addEventListener(type, listener){this.listeners[type]=listener}setPointerCapture(){}getBoundingClientRect(){return {left:0,width:100,height:210}}pause(){this.paused=true}play(){this.paused=false;return Promise.resolve()}}
 const nodes={};const panel=new El('timeline-panel');
 const doc={getElementById(id){return nodes[id]??=new El(id)},createElement(){return new El()},querySelector(s){if(s==='.timeline-panel')return panel;return null}};
-let crop={x:0,y:0,w:1,h:1},cropCommit,cropActive=false,savedPayload=null,retimedCalls=0,showToastArgs=null;
+let crop={x:0,y:0,w:1,h:1},cropCommit,cropActive=false,savedPayload=null,retimedCalls=0,showToastArgs=null,saveCalls=0,confirmCalls=0,allowCopy=false;
 const context={
  createAnnotations:()=>({renderTimeline(){},renderMarks(){},shiftTiming(){},setDrawing(){},snapshot:()=>[],restore(){},hasOmitted:()=>false,export:()=>[]}),
  createCropEditor:(_el,onChange,commit)=>{cropCommit=commit;return {get:()=>({...crop}),set:v=>{crop={...v};onChange?.(crop,{active:cropActive,full:crop.x===0&&crop.y===0&&crop.w===1&&crop.h===1})},reset:()=>{crop={x:0,y:0,w:1,h:1};cropActive=false;onChange?.(crop,{active:false,full:true})},setActive:v=>{cropActive=Boolean(v);onChange?.(crop,{active:cropActive,full:crop.x===0&&crop.y===0&&crop.w===1&&crop.h===1})},isActive:()=>cropActive,isFull:()=>crop.x===0&&crop.y===0&&crop.w===1&&crop.h===1}},
  renderSpeedAdjustedWebm:async(_url,segs)=>{retimedCalls++;const dur=segs.reduce((s,x)=>s+(x.end-x.start)/(x.speed||1),0);return {blob:new Blob(['retimed']),duration:dur}},
  showToast:(...a)=>{showToastArgs=a},
+ showSavedAssetToast:(...a)=>{showToastArgs=a},
+ dismissToast:()=>{},
  document:doc,
  window:{addEventListener:(name,fn)=>events[name]=fn,captureTags:{values:()=>[]},innerHeight:900,dispatchEvent(){}},
  location:{href:'https://extension/review.html?id=test'},
  URL:class extends URL{static createObjectURL(){return 'blob:test'}static revokeObjectURL(){}},
  readRecording:async()=>({title:'Test',url:'https://example.com',blob:new Blob(['abc'])}),
  deleteRecording:async()=>{},
- Blob,Error,Promise,Math,Number,String,Array,CustomEvent:class{constructor(t){this.type=t}},requestAnimationFrame:()=>{},cancelAnimationFrame:()=>{},confirm:()=>false,console,
- chrome:{runtime:{sendMessage:async m=>{savedPayload=m;return {ok:true}}}}
+ Blob,Error,Promise,Math,Number,String,Array,CustomEvent:class{constructor(t){this.type=t}},requestAnimationFrame:()=>{},cancelAnimationFrame:()=>{},confirm:()=>{confirmCalls++;return allowCopy},console,
+ chrome:{runtime:{sendMessage:async m=>{saveCalls++;savedPayload=m;return {ok:true,id:'saved-clip'}}}}
 };
 vm.runInNewContext(fs.readFileSync(new URL('./extension/review.js',import.meta.url),'utf8'),context);
 await new Promise(r=>setTimeout(r,10));
@@ -60,6 +62,21 @@ assert.equal(nodes.video.playbackRate,2);
 await nodes.save.onclick();
 assert.equal(retimedCalls,1);
 assert.equal(JSON.stringify(savedPayload.segments),JSON.stringify([{start:0,end:5}]));
+assert.deepEqual(showToastArgs,['clip','saved-clip']);
+await nodes.save.onclick();
+assert.equal(confirmCalls,1);
+assert.equal(saveCalls,1);
+assert.equal(retimedCalls,1);
+assert.deepEqual(showToastArgs,['clip','saved-clip',true]);
+nodes.title.value='Edited clip';
+await nodes.save.onclick();
+assert.equal(confirmCalls,1);
+assert.equal(saveCalls,2);
+assert.equal(savedPayload.title,'Edited clip');
+allowCopy=true;
+await nodes.save.onclick();
+assert.equal(confirmCalls,2);
+assert.equal(saveCalls,3);
 // The two upper corners shorten the same source segment when dragged inward.
 for(const [side,from,to] of [['speed-left',0,50],['speed-right',100,50]]){
  nodes.reset.listeners.click();

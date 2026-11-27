@@ -1,7 +1,7 @@
 const video=document.getElementById('video'),status=document.getElementById('status'),save=document.getElementById('save'),track=document.getElementById('track'),clipsNode=document.getElementById('clips'),head=document.getElementById('playhead'),play=document.getElementById('play'),ruler=document.getElementById('ruler');
 const cropToggle=document.getElementById('crop-toggle'),resetCrop=document.getElementById('reset-crop'),speedSelect=document.getElementById('speed'),timelinePanel=document.querySelector?.('.timeline-panel'),timelineResizer=document.getElementById('timeline-resizer'),timelineToggle=document.getElementById('timeline-toggle');
 const id=new URL(location.href).searchParams.get('id'),$=id=>document.getElementById(id),clamp=(n,a,b)=>Math.max(a,Math.min(b,n)),frame=1/60;
-let metadata={},sourceUrl='',duration=0,clips=[],selected=0,drag=null,exporting=false,history=[],future=[],playhead=0,playingClip=0,dirty=false,loaded=false,initialized=false,rafId=0;
+let metadata={},sourceUrl='',duration=0,clips=[],selected=0,drag=null,exporting=false,confirmingSave=false,lastSavedSignature=null,lastSavedId=null,history=[],future=[],playhead=0,playingClip=0,dirty=false,loaded=false,initialized=false,rafId=0;
 const clipSpeed=c=>c?.speed||1,width=c=>(c.end-c.start)/clipSpeed(c),end=c=>c.at+width(c);
 const timelineStart=()=>clips.length?Math.min(...clips.map(c=>c.at)):0;
 const timelineEnd=()=>clips.length?Math.max(...clips.map(end)):duration;
@@ -363,13 +363,13 @@ async function confirmAction(opts){
  if(typeof window.sightlineConfirm==='function')return await window.sightlineConfirm(opts);
  return confirm(opts.description||opts.title);
 }
-['title','url','notes','category'].forEach(fieldId=>{const el=$(fieldId);if(el?.addEventListener){el.addEventListener('input',()=>{if(loaded)dirty=true});el.addEventListener('change',()=>{if(loaded)dirty=true})}});
+['title','url','notes','category','tags'].forEach(fieldId=>{const el=$(fieldId);if(el?.addEventListener){el.addEventListener('input',()=>{if(loaded)dirty=true});el.addEventListener('change',()=>{if(loaded)dirty=true})}});
 const tagPills=$('tag-pills');
 if(tagPills&&typeof MutationObserver!=='undefined'){new MutationObserver(()=>{if(loaded)dirty=true}).observe(tagPills,{childList:true})}
-window.addEventListener('beforeunload',e=>{if(dirty&&!exporting){e.preventDefault();e.returnValue=''}});
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
 window.addEventListener('pointerdown',e=>{const active=document.activeElement;if(!isTextEntry(active))return;const t=e.target;if(t instanceof Element&&t.closest('input:not([type="range"]),textarea,select,.tags-field,.tag-suggestions,.annotation-editor,[contenteditable="true"]'))return;if(active instanceof HTMLElement)active.blur()},true);
-window.addEventListener('keydown',e=>{if(exporting||isDialogOpen()||e.code!=='Space'||e.ctrlKey||e.metaKey||e.altKey)return;if(isTextEntry(e.target))return;e.preventDefault();e.stopPropagation();if(!e.repeat)play.click()},true);
-window.addEventListener('keyup',e=>{if(exporting||isDialogOpen()||e.code!=='Space'||e.ctrlKey||e.metaKey||e.altKey)return;if(isTextEntry(e.target))return;e.preventDefault();e.stopPropagation()},true);
+window.addEventListener('keydown',e=>{if(exporting||isDialogOpen()||e.code!=='Space'||e.ctrlKey||e.metaKey||e.altKey)return;if(isTextEntry(e.target)||e.target.closest?.('#toast'))return;e.preventDefault();e.stopPropagation();if(!e.repeat)play.click()},true);
+window.addEventListener('keyup',e=>{if(exporting||isDialogOpen()||e.code!=='Space'||e.ctrlKey||e.metaKey||e.altKey)return;if(isTextEntry(e.target)||e.target.closest?.('#toast'))return;e.preventDefault();e.stopPropagation()},true);
 window.addEventListener('keydown',e=>{
  if(exporting||isDialogOpen())return;
  if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey&&e.code==='Backquote'){e.preventDefault();toggleTimeline();return}
@@ -388,12 +388,14 @@ window.addEventListener('keydown',e=>{
  else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();video.pause();setTime(playhead+(e.key==='ArrowRight'?1:-1)*frame*(e.shiftKey?10:1))}
  else if(e.key==='Home'||e.key==='End'){e.preventDefault();video.pause();setTime(e.key==='Home'?timelineStart():timelineEnd())}
 });
+function syncDocumentTitle(){const title=$('title')?.value?.trim()||'';document.title=title?`${title} — Sightline`:'Sightline Editor'}
+{const titleEl=$('title');if(titleEl){titleEl.addEventListener('input',syncDocumentTitle);titleEl.addEventListener('change',syncDocumentTitle)}}
 let metadataDuration=0;
 readRecording(id).then(async value=>{
  if(!value)throw Error('Recording not found.');
  metadata=value;
  if(typeof loadSourceDefaults==='function')await loadSourceDefaults(value.url);
- $('title').value=value.title||'';
+ $('title').value=value.title||'';syncDocumentTitle();
  $('url').value=value.url||'';
  if(value.state==='partial'||value.state==='recording')status.textContent='This recording may be incomplete.';
  sourceUrl=URL.createObjectURL(value.blob);
@@ -418,13 +420,34 @@ video.onloadedmetadata=()=>{
  }else init();
 };
 function init(){if(initialized)return;video.pause?.();duration=metadataDuration=video.duration;if(!Number.isFinite(duration)||duration<=0){status.textContent='Could not read recording duration.';save.disabled=true;return}initialized=true;save.disabled=false;clips=[{start:0,end:duration,at:0,speed:1}];selected=0;drawRuler();setTime(0)}
+function clipEdits(commitTags=true){
+ return {
+  clips:[...clips].sort((a,b)=>a.at-b.at).map(c=>({start:c.start,end:c.end,at:c.at,speed:clipSpeed(c)})),
+  crop:cropEditor.isFull()?null:cropEditor.get(),
+  title:$('title').value.trim(),
+  url:$('url').value.trim(),
+  annotations:annotations.export(),
+  tags:window.captureTags.values(commitTags),
+  notes:$('notes').value,
+  category:$('category').value,
+ };
+}
 save.onclick=async()=>{
- if(!clips.length||exporting)return;
- if(annotations.hasOmitted()&&!await confirmAction({title:'Save with omitted annotations?',description:'Some annotations are outside the selected crop or clips and will not be saved. Continue?',confirmLabel:'Continue',destructive:false}))return;
- exporting=true;save.disabled=true;video.pause();
+ if(!clips.length||exporting||confirmingSave)return;
+ confirmingSave=true;
  let tempUrl='';
  try{
-  const sortedClips=[...clips].sort((a,b)=>a.at-b.at);
+  const {clips:sortedClips,...fields}=clipEdits();
+  const saveSig=JSON.stringify({clips:sortedClips,...fields});
+  if(saveSig===lastSavedSignature){
+   dismissToast?.(true);
+   if(!await confirmAction({title:'Already saved',description:'No changes were made since you last saved this clip. Save another copy anyway?',confirmLabel:'Save copy',destructive:false})){
+    showSavedAssetToast('clip',lastSavedId,true);
+    return;
+   }
+  }
+  if(annotations.hasOmitted()&&!await confirmAction({title:'Save with omitted annotations?',description:'Some annotations are outside the selected crop or clips and will not be saved. Continue?',confirmLabel:'Continue',destructive:false}))return;
+  exporting=true;save.disabled=true;video.pause();
   const hasSpeedChange=sortedClips.some(c=>Math.abs(clipSpeed(c)-1)>1e-4);
   let exportUrl=sourceUrl;
   let segments=sortedClips.map(c=>({start:c.start,end:c.end}));
@@ -443,29 +466,18 @@ save.onclick=async()=>{
    segments=[{start:0,end:retimed.duration}];
   }
   status.textContent='Sending and rendering your clip…';
-  const result=await chrome.runtime.sendMessage({
-   type:'save-clip',
-   data:exportUrl,
-   title:$('title').value.trim(),
-   url:$('url').value.trim(),
-   annotations:annotations.export(),
-   tags:window.captureTags.values(),
-   notes:document.getElementById('notes').value,
-   category:$('category').value,
-   segments,
-   crop:(()=>{const r=cropEditor.get();return (cropEditor.isFull?cropEditor.isFull():(r.x===0&&r.y===0&&r.w===1&&r.h===1))?null:r})()
-  });
+  const result=await chrome.runtime.sendMessage({type:'save-clip',data:exportUrl,segments,...fields});
   if(!result)throw Error('No response from Sightline. Reload the extension and try again.');
   if(result.error)throw Error(result.error);
-  dirty=false;
-  status.textContent='';
-  showToast('Clip saved',result.id?'Open it or find it in Sightline.':'Sightline will import it while open.',result.id?{actionLabel:'Open clip',onAction:async()=>{const openRes=await chrome.runtime.sendMessage({type:'open-asset',id:result.id});if(openRes?.error)throw Error(openRes.error)}}:undefined);
+  dirty=Boolean($('tags').value.trim())||JSON.stringify(clipEdits(false))!==saveSig;
+  lastSavedSignature=saveSig;lastSavedId=result.id;status.textContent='';
+  showSavedAssetToast('clip',result.id);
  }catch(e){
   status.textContent='';
-  showToast('Could not save clip',e.message||String(e),true);
+  showToast('Could not save clip',e.message||String(e),{tone:'error'});
  }finally{
   if(tempUrl)URL.revokeObjectURL(tempUrl);
-  exporting=false;save.disabled=false;
+  confirmingSave=false;exporting=false;save.disabled=false;
  }
 };
 $('discard').onclick=async()=>{

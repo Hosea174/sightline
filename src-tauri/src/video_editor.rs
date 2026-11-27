@@ -80,43 +80,7 @@ pub struct VideoExportResult {
 
 pub fn ffprobe_program() -> PathBuf {
     let probe_name = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
-    let ffmpeg = super::ffmpeg_program();
-    if ffmpeg.is_file() {
-        let sibling = ffmpeg.with_file_name(probe_name);
-        if sibling.is_file() {
-            return sibling;
-        }
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let exe = dir.join(probe_name);
-            if exe.is_file() {
-                return exe;
-            }
-        }
-    }
-    #[cfg(target_os = "windows")]
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let packages = PathBuf::from(local)
-            .join("Microsoft")
-            .join("WinGet")
-            .join("Packages");
-        if let Ok(entries) = fs::read_dir(packages) {
-            for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().starts_with("Gyan.FFmpeg_") {
-                    if let Ok(builds) = fs::read_dir(entry.path()) {
-                        for build in builds.flatten() {
-                            let exe = build.path().join("bin").join("ffprobe.exe");
-                            if exe.is_file() {
-                                return exe;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    PathBuf::from(probe_name)
+    super::runtime_tools::find_ffprobe().unwrap_or_else(|| PathBuf::from(probe_name))
 }
 
 pub fn is_full_crop(crop: &VideoCropRect) -> bool {
@@ -436,7 +400,8 @@ pub fn probe_video_at(path: &Path) -> Result<VideoProbeInfo, String> {
     if !path.is_file() {
         return Err("Video file not found".into());
     }
-    let mut cmd = Command::new(ffprobe_program());
+    let ffprobe = super::runtime_tools::ensure_ffprobe()?;
+    let mut cmd = Command::new(ffprobe);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000);
     let out = cmd
@@ -531,8 +496,9 @@ pub fn export_edited_video_at(root: &Path, req: VideoEditRequest) -> Result<Vide
         None => filename,
     };
 
+    let ffmpeg = super::runtime_tools::ensure_ffmpeg()?;
     let args = build_ffmpeg_args(&source_path, &temp_path, &segments, crop, with_audio);
-    let mut cmd = Command::new(super::ffmpeg_program());
+    let mut cmd = Command::new(ffmpeg);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x0800_0000);
     let output = cmd.args(&args).output().map_err(|_| {

@@ -187,15 +187,48 @@ async function saveCapture(url, extension, title, sourceUrl, name, tags=[], cate
     }
     await send(begin);
     for(let offset=0;offset<payloadBytes.byteLength;offset+=32768){const bytes=payloadBytes.subarray(offset,offset+32768);await send({type:'chunk',data:Array.from(bytes)})}
-    await send({type:'end'});
-    return id;
+    const result=await send({type:'end'});
+    return isFontCapture ? {id,installError:result.installed ? null : (result.installError || 'Update the Sightline native bridge to install fonts.')} : id;
   }finally{port.disconnect()}
 }
 const imageTypes={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif','image/svg+xml':'svg','image/bmp':'bmp','image/avif':'avif','image/x-icon':'ico','image/vnd.microsoft.icon':'ico'};
+const badgeTimers=new Map();
+chrome.tabs?.onRemoved?.addListener(tabId=>{
+ const timer=badgeTimers.get(tabId);
+ if(timer!==undefined){clearTimeout(timer);badgeTimers.delete(tabId)}
+});
 async function notifyImageResult(tabId,message,failed=false){
- await chrome.action.setBadgeBackgroundColor({color:failed?'#b44940':'#f26628'}).catch(()=>{});await chrome.action.setBadgeText({text:failed?'!':'OK'}).catch(()=>{});await chrome.action.setTitle({title:`Sightline: ${message}`}).catch(()=>{});
- if(tabId)await chrome.scripting.executeScript({target:{tabId},func:(message,failed)=>{const el=document.createElement('div');el.textContent=`Sightline: ${message}`;el.style.cssText=`all:initial;position:fixed;z-index:2147483647;right:20px;top:20px;max-width:360px;padding:14px 18px;border-radius:8px;background:${failed?'#562d2b':'#29292c'};color:#fff;font:13px system-ui;box-shadow:0 8px 30px #0009`;document.documentElement.append(el);setTimeout(()=>el.remove(),5000)},args:[message,failed]}).catch(()=>{});
- setTimeout(()=>{chrome.action.setBadgeText({text:''}).catch(()=>{});chrome.action.setTitle({title:'Sightline Capture'}).catch(()=>{})},6000);
+ const hasTab=tabId!==null&&tabId!==undefined;
+ if(hasTab){
+  await chrome.action.setBadgeBackgroundColor({tabId,color:failed?'#dc2626':'#f26628'}).catch(()=>{});
+  await chrome.action.setBadgeText({tabId,text:failed?'!':'OK'}).catch(()=>{});
+  await chrome.action.setTitle({tabId,title:`Sightline: ${message}`}).catch(()=>{});
+  const prevTimer=badgeTimers.get(tabId);
+  if(prevTimer!==undefined)clearTimeout(prevTimer);
+  badgeTimers.set(tabId,setTimeout(()=>{
+   badgeTimers.delete(tabId);
+   chrome.action.setBadgeText({tabId,text:''}).catch(()=>{});
+   chrome.action.setTitle({tabId,title:'Sightline Capture'}).catch(()=>{});
+  },6000));
+  await chrome.scripting.executeScript({target:{tabId},func:(message,failed)=>{
+   document.getElementById('__sightline_notice')?.remove();
+   const dark=window.matchMedia?.('(prefers-color-scheme: dark)')?.matches;
+   const el=document.createElement('div');
+   el.id='__sightline_notice';
+   el.setAttribute('role',failed?'alert':'status');
+   el.textContent=`Sightline: ${message}`;
+   const bg=dark?'#18181b':'#ffffff';
+   const fg=failed?(dark?'#fca5a5':'#b91c1c'):(dark?'#fafafa':'#18181b');
+   const border=failed?'rgba(220,38,38,.45)':(dark?'#27272a':'#e4e4e7');
+   el.style.cssText=`all:initial;position:fixed;z-index:2147483647;right:20px;bottom:20px;max-width:340px;padding:10px 14px;border-radius:10px;border:1px solid ${border};background:${bg};color:${fg};font:500 12.5px/1.4 system-ui,-apple-system,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,${dark?.42:.12}),0 1px 3px rgba(0,0,0,.08);cursor:pointer`;
+   const remove=()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',onVis);el.remove()};
+   const onVis=()=>{if(document.hidden)remove()};
+   const timer=setTimeout(remove,4500);
+   el.addEventListener('click',remove);
+   document.addEventListener('visibilitychange',onVis);
+   document.documentElement.append(el);
+  },args:[message,failed]}).catch(()=>{});
+ }
 }
 const makeCropId=()=>typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
 async function saveContextImage(info,tab){
@@ -218,10 +251,20 @@ async function saveContextImage(info,tab){
  await chrome.tabs.create({url:chrome.runtime.getURL('crop.html')});
 }
 if(chrome.contextMenus){chrome.runtime.onInstalled.addListener(()=>{chrome.contextMenus.create({id:'sightline-save-image',title:'Save image to Sightline',contexts:['image']})});chrome.contextMenus.onClicked.addListener((info,tab)=>{if(info.menuItemId!=='sightline-save-image')return;void saveContextImage(info,tab).catch(error=>notifyImageResult(tab?.id,error.message||String(error),true))})}
-const capture = async () => {
-  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];
+async function captureTabImage(tab){
+ const [active]=await chrome.tabs.query({active:true,windowId:tab.windowId});
+ if(active?.id!==tab.id)throw Error('Capture stopped because the active tab changed.');
+ try{
+  return await chrome.tabs.captureVisibleTab(tab.windowId,{format:'png'});
+ }catch(error){
+  if(/<all_urls>|activeTab/.test(error.message))throw Error('Sightline needs site access to take this screenshot. Open the Sightline extension on this page and start the capture again.');
+  throw error;
+ }
+}
+const capture = async (tab) => {
+  tab??=(await chrome.tabs.query({active:true,currentWindow:true}))[0];
   if(!tab?.id)throw Error('No active tab');
-  const image=await chrome.tabs.captureVisibleTab(tab.windowId,{format:'png'});
+  const image=await captureTabImage(tab);
   await chrome.storage.local.set({cropId:makeCropId(),cropImage:image,cropTitle:tab.title||'',cropUrl:tab.url||'',cropFull:true,cropExtension:'png',cropName:''});
   await chrome.tabs.create({url:chrome.runtime.getURL('crop.html')});
 };
@@ -239,8 +282,7 @@ async function captureFullPage(tabOverride=null,region=null){
    const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];if(active?.id!==tab.id)throw Error('Capture stopped because the active tab changed.');
    const y=await execute((y,x)=>{scrollTo(x,y);return scrollY},[requested,info.x]);
    await new Promise(resolve=>setTimeout(resolve,650));
-   const stillActive=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];if(stillActive?.id!==tab.id)throw Error('Capture stopped because the active tab changed.');
-   const data=await chrome.tabs.captureVisibleTab(tab.windowId,{format:'png'});const bitmap=await createImageBitmap(await (await fetch(data)).blob());
+   const data=await captureTabImage(tab);const bitmap=await createImageBitmap(await (await fetch(data)).blob());
    if(!canvas){scale=bitmap.width/info.width;const w=Math.round(box.width*scale),h=Math.ceil(box.height*scale);if(h>32000||w*h>120000000)throw Error('This selection is too large to capture at the current screen resolution.');canvas=new OffscreenCanvas(w,h);ctx=canvas.getContext('2d')}
    const start=Math.max(lastBottom,y),bottom=Math.min(endY,y+info.height);if(bottom>start){const sx=Math.max(0,Math.round((box.left-info.x)*scale)),sy=Math.max(0,Math.round((start-y)*scale)),dy=Math.round((start-box.top)*scale),w=Math.min(bitmap.width-sx,canvas.width),h=Math.min(bitmap.height-sy,Math.round((bottom-start)*scale));if(w>0&&h>0)ctx.drawImage(bitmap,sx,sy,w,h,0,dy,w,h);lastBottom=bottom}bitmap.close();
    if(!hidden && lastBottom<endY){hidden=true;await execute(()=>{window.__sightlineHidden=[...document.querySelectorAll('body *')].filter(el=>{const pos=getComputedStyle(el).position;const r=el.getBoundingClientRect();return (pos==='fixed'||pos==='sticky')&&r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0}).map(el=>{const value=el.style.getPropertyValue('visibility'),priority=el.style.getPropertyPriority('visibility');el.style.setProperty('visibility','hidden','important');return {el,value,priority}})});}
@@ -1049,8 +1091,18 @@ async function inspectFonts() {
   });
   return {fonts,title:tab.title||'',url:tab.url||''};
 }
-async function captureArea() {
- const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)throw Error('No active tab');
+async function captureArea(tab){
+ try{
+  tab??=(await chrome.tabs.query({active:true,currentWindow:true}))[0];
+  if(!tab?.id)throw Error('No active tab');
+  const region=await selectArea(tab);
+  if(region)await captureFullPage(tab,region);
+ }catch(error){
+  await notifyImageResult(tab?.id,error.message||String(error),true);
+  throw error;
+ }
+}
+async function selectArea(tab) {
  const result=await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>new Promise(resolve=>{
    const existing=document.getElementById('__sightline_selector');
    if(existing){try{window.dispatchEvent(new Event('__sightline_selector_cancel'))}catch{}resolve(null);return}
@@ -1081,11 +1133,9 @@ async function captureArea() {
    host.addEventListener('pointercancel',()=>cleanup(null));
    host.addEventListener('contextmenu',e=>{e.preventDefault()});
   })});
- const region=result[0]?.result;if(!region)return;
- try{await captureFullPage(tab,region)}catch(error){await chrome.scripting.executeScript({target:{tabId:tab.id},func:message=>{const notice=document.createElement('div');notice.textContent=`Sightline: ${message}`;notice.style.cssText='all:initial;position:fixed;z-index:2147483647;right:20px;top:20px;max-width:360px;padding:14px 18px;border-radius:8px;background:#29292c;color:#fff;font:13px system-ui;box-shadow:0 8px 30px #0009';document.documentElement.append(notice);setTimeout(()=>notice.remove(),7000)},args:[error.message||String(error)]}).catch(()=>{});throw error}
-
+ return result[0]?.result;
 }
 
-async function record(){const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)return;const existing=await chrome.offscreen.hasDocument();if(!existing)await chrome.offscreen.createDocument({url:'recorder.html',reasons:['USER_MEDIA'],justification:'Record the current browser tab'});const stream=await chrome.tabCapture.getMediaStreamId({targetTabId:tab.id});const result=await chrome.runtime.sendMessage({type:'start',stream,title:tab.title,url:tab.url});if(result?.error)throw Error(result.error);}
-chrome.commands.onCommand.addListener(async c=>{try{if(c==='capture-visible')await capture();if(c==='record-tab'){const exists=await chrome.offscreen.hasDocument();const state=exists?await chrome.runtime.sendMessage({type:'get-recorder-status'}):null;if(state?.recording)await chrome.runtime.sendMessage({type:'stop-recording'});else await record()}if(c==='capture-area')await captureArea()}catch(e){const [tab]=await chrome.tabs.query({active:true,currentWindow:true}).catch(()=>[]);await notifyImageResult(tab?.id,e?.message||String(e),true)}});
-chrome.runtime.onMessage.addListener((msg,_sender,send)=>{if(msg.type==='library-tags'){const port=chrome.runtime.connectNative('com.sightline.capture');port.onMessage.addListener(result=>{send(result);port.disconnect()});port.onDisconnect.addListener(()=>{if(chrome.runtime.lastError)send({error:chrome.runtime.lastError.message})});port.postMessage({type:'tags',url:msg.url||''});return true}if(msg.type==='open-asset'){const port=chrome.runtime.connectNative('com.sightline.capture');let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);port.onMessage.removeListener(onMessage);port.onDisconnect.removeListener(onDisconnect);try{port.disconnect()}catch{}send(value)};const onMessage=result=>finish(result||{ok:true});const onDisconnect=()=>finish({error:chrome.runtime.lastError?.message||'Sightline bridge disconnected.'});const timer=setTimeout(()=>finish({error:'Opening the saved asset timed out.'}),10000);port.onMessage.addListener(onMessage);port.onDisconnect.addListener(onDisconnect);try{port.postMessage({type:'open-asset',id:msg.id,launch:msg.launch!==false,wait:msg.wait})}catch(e){finish({error:e?.message||String(e)})}return true}if(msg.type==='recording-status'){chrome.offscreen.hasDocument().then(exists=>exists?chrome.runtime.sendMessage({type:'get-recorder-status'}):{recording:false}).then(send).catch(()=>send({recording:false}));return true}if(msg.type==='recording-ready'){chrome.tabs.create({url:chrome.runtime.getURL(`review.html?id=${encodeURIComponent(msg.id)}`)}).then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='find-fonts'){inspectFonts().then(value=>send(value)).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-font'){const extension=msg.extension;if(!['woff','woff2','ttf','otf'].includes(extension)){send({error:'Unsupported font format'});return}if(!isAllowedFetchUrl(msg.file,['https:','http:','data:','blob:'])){send({error:'Unsupported font URL'});return}const ALLOWED_FONT_SOURCES=['capture','local','google','upload'];const fontSource=typeof msg.fontSource==='string'&&ALLOWED_FONT_SOURCES.includes(msg.fontSource)?msg.fontSource:'capture';const fontMeta={fontSource};if(typeof msg.family==='string'&&msg.family.trim())fontMeta.family=msg.family.trim();const w=normalizeFontWeightNumber(msg.weight);const wMin=normalizeFontWeightNumber(msg.weightMin);const wMax=normalizeFontWeightNumber(msg.weightMax);if(wMin!==null&&wMax!==null){const lo=Math.min(wMin,wMax),hi=Math.max(wMin,wMax);fontMeta.weightMin=lo;fontMeta.weightMax=hi;fontMeta.weight=w!==null&&w>=lo&&w<=hi?w:(lo<=400&&hi>=400?400:lo);fontMeta.isVariable=hi>lo?true:Boolean(msg.isVariable);}else if(w!==null){fontMeta.weight=w;fontMeta.weightMin=w;fontMeta.weightMax=w;if(typeof msg.isVariable==='boolean')fontMeta.isVariable=msg.isVariable;}else{const single=wMin??wMax;if(single!==null){fontMeta.weight=single;fontMeta.weightMin=single;fontMeta.weightMax=single;}if(typeof msg.isVariable==='boolean')fontMeta.isVariable=msg.isVariable;}if(msg.style==='normal'||msg.style==='italic')fontMeta.style=msg.style;saveCapture(msg.file,extension,msg.title,msg.url,msg.name,undefined,undefined,undefined,undefined,undefined,undefined,fontMeta).then(id=>send({ok:true,id})).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-area'){saveCapture(msg.data,msg.extension||'png',msg.title,msg.url,msg.name||'',msg.tags,msg.category,undefined,undefined,msg.notes,msg.annotations).then(id=>send({ok:true,id})).catch(e=>send({error:String(e)}));return true}if(msg.type==='area'){captureArea().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-clip'){saveCapture(msg.data,'webm',msg.title,msg.url,'',msg.tags,msg.category,msg.segments,msg.crop,msg.notes,msg.annotations).then(id=>send({ok:true,id})).catch(e=>send({error:String(e)}));return true}if(msg.type==='full-page'){captureFullPage().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='screenshot'){capture().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='record'){record().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='stop'){chrome.runtime.sendMessage({type:'stop-recording'}).then(result=>send(result)).catch(e=>send({error:String(e)}));return true}});
+async function record(){const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];if(!tab?.id)return;const existing=await chrome.offscreen.hasDocument();if(!existing)await chrome.offscreen.createDocument({url:'recorder.html',reasons:['USER_MEDIA'],justification:'Record the current browser tab'});const stream=await chrome.tabCapture.getMediaStreamId({targetTabId:tab.id});const result=await chrome.runtime.sendMessage({type:'start',stream,tabId:tab.id,title:tab.title,url:tab.url});if(result?.error)throw Error(result.error);}
+chrome.commands.onCommand.addListener(async (c,tab)=>{if(c==='capture-area')return captureArea(tab).catch(()=>{});try{if(c==='capture-visible')await capture(tab);if(c==='record-tab'){const exists=await chrome.offscreen.hasDocument();const state=exists?await chrome.runtime.sendMessage({type:'get-recorder-status'}):null;if(state?.recording)await chrome.runtime.sendMessage({type:'stop-recording'});else await record()}}catch(e){tab??=(await chrome.tabs.query({active:true,currentWindow:true}).catch(()=>[]))[0];await notifyImageResult(tab?.id,e?.message||String(e),true)}});
+chrome.runtime.onMessage.addListener((msg,_sender,send)=>{if(msg.type==='library-tags'){const port=chrome.runtime.connectNative('com.sightline.capture');port.onMessage.addListener(result=>{send(result);port.disconnect()});port.onDisconnect.addListener(()=>{if(chrome.runtime.lastError)send({error:chrome.runtime.lastError.message})});port.postMessage({type:'tags',url:msg.url||''});return true}if(msg.type==='open-asset'){const port=chrome.runtime.connectNative('com.sightline.capture');let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);port.onMessage.removeListener(onMessage);port.onDisconnect.removeListener(onDisconnect);try{port.disconnect()}catch{}send(value)};const onMessage=result=>finish(result||{ok:true});const onDisconnect=()=>finish({error:chrome.runtime.lastError?.message||'Sightline bridge disconnected.'});const timer=setTimeout(()=>finish({error:'Opening the saved asset timed out.'}),10000);port.onMessage.addListener(onMessage);port.onDisconnect.addListener(onDisconnect);try{port.postMessage({type:'open-asset',id:msg.id,launch:msg.launch!==false,wait:msg.wait})}catch(e){finish({error:e?.message||String(e)})}return true}if(msg.type==='recording-status'){chrome.offscreen.hasDocument().then(exists=>exists?chrome.runtime.sendMessage({type:'get-recorder-status'}):{recording:false}).then(send).catch(()=>send({recording:false}));return true}if(msg.type==='recording-ready'){chrome.tabs.create({url:chrome.runtime.getURL(`review.html?id=${encodeURIComponent(msg.id)}`)}).then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='find-fonts'){inspectFonts().then(value=>send(value)).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-font'){const extension=msg.extension;if(!['woff','woff2','ttf','otf'].includes(extension)){send({error:'Unsupported font format'});return}if(!isAllowedFetchUrl(msg.file,['https:','http:','data:','blob:'])){send({error:'Unsupported font URL'});return}const ALLOWED_FONT_SOURCES=['capture','local','google','upload'];const fontSource=typeof msg.fontSource==='string'&&ALLOWED_FONT_SOURCES.includes(msg.fontSource)?msg.fontSource:'capture';const fontMeta={fontSource};if(typeof msg.family==='string'&&msg.family.trim())fontMeta.family=msg.family.trim();const w=normalizeFontWeightNumber(msg.weight);const wMin=normalizeFontWeightNumber(msg.weightMin);const wMax=normalizeFontWeightNumber(msg.weightMax);if(wMin!==null&&wMax!==null){const lo=Math.min(wMin,wMax),hi=Math.max(wMin,wMax);fontMeta.weightMin=lo;fontMeta.weightMax=hi;fontMeta.weight=w!==null&&w>=lo&&w<=hi?w:(lo<=400&&hi>=400?400:lo);fontMeta.isVariable=hi>lo?true:Boolean(msg.isVariable);}else if(w!==null){fontMeta.weight=w;fontMeta.weightMin=w;fontMeta.weightMax=w;if(typeof msg.isVariable==='boolean')fontMeta.isVariable=msg.isVariable;}else{const single=wMin??wMax;if(single!==null){fontMeta.weight=single;fontMeta.weightMin=single;fontMeta.weightMax=single;}if(typeof msg.isVariable==='boolean')fontMeta.isVariable=msg.isVariable;}if(msg.style==='normal'||msg.style==='italic')fontMeta.style=msg.style;saveCapture(msg.file,extension,msg.title,msg.url,msg.name,undefined,undefined,undefined,undefined,undefined,undefined,fontMeta).then(result=>send({ok:true,...result})).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-area'){saveCapture(msg.data,msg.extension||'png',msg.title,msg.url,msg.name||'',msg.tags,msg.category,undefined,undefined,msg.notes,msg.annotations).then(id=>send({ok:true,id})).catch(e=>send({error:String(e)}));return true}if(msg.type==='area'){captureArea(_sender?.tab).then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='save-clip'){saveCapture(msg.data,'webm',msg.title,msg.url,'',msg.tags,msg.category,msg.segments,msg.crop,msg.notes,msg.annotations).then(id=>send({ok:true,id})).catch(e=>send({error:String(e)}));return true}if(msg.type==='full-page'){captureFullPage().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='screenshot'){capture().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='record'){record().then(()=>send({ok:true})).catch(e=>send({error:String(e)}));return true}if(msg.type==='stop'){chrome.runtime.sendMessage({type:'stop-recording'}).then(result=>send(result)).catch(e=>send({error:String(e)}));return true}});

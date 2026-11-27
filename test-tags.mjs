@@ -1,4 +1,41 @@
 ﻿import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';
 class El{constructor(){this.children=[];this.listeners={};this.value='';this.attrs={};this._text=''}set textContent(t){this._text=t;this.children=[]}get textContent(){return this._text}append(...els){this.children.push(...els)}addEventListener(type,fn){this.listeners[type]=fn}setAttribute(k,v){this.attrs[k]=v}focus(){}}
 const nodes={tags:new El(),'tag-pills':new El(),'tag-suggestions':new El()},document={getElementById:id=>nodes[id],createElement:()=>new El()},window={},chrome={runtime:{sendMessage:async()=>({tags:['Motion','SaaS']})}};
-vm.runInNewContext(fs.readFileSync(new URL('./extension/tags.js',import.meta.url),'utf8'),{document,window,chrome,Array});await Promise.resolve();assert.equal(nodes['tag-suggestions'].children.length,2);let prevented=false;nodes.tags.value='motion';nodes.tags.listeners.keydown({key:',',preventDefault(){prevented=true}});assert.equal(prevented,true);assert.equal(nodes['tag-pills'].children.length,1);assert.equal(nodes['tag-pills'].children[0].children[0].textContent,'Motion');nodes.tags.value='Saa';nodes.tags.listeners.input();nodes.tags.listeners.keydown({key:'Tab',preventDefault(){}});nodes.tags.value='saas';nodes.tags.listeners.keydown({key:',',preventDefault(){}});assert.equal(window.captureTags.values().join(','),'Motion,SaaS');nodes['tag-pills'].children[0].children[1].onclick();assert.equal(window.captureTags.values().join(','),'SaaS');console.log('Tag pills, autocomplete, deduplication and removal passed.');
+vm.runInNewContext(fs.readFileSync(new URL('./extension/tags.js',import.meta.url),'utf8'),{document,window,chrome,Array});await Promise.resolve();assert.equal(nodes['tag-suggestions'].children.length,2);let prevented=false;nodes.tags.value='motion';nodes.tags.listeners.keydown({key:',',preventDefault(){prevented=true}});assert.equal(prevented,true);assert.equal(nodes['tag-pills'].children.length,1);assert.equal(nodes['tag-pills'].children[0].children[0].textContent,'Motion');nodes.tags.value='Saa';nodes.tags.listeners.input();nodes.tags.listeners.keydown({key:'Tab',preventDefault(){}});nodes.tags.value='saas';nodes.tags.listeners.keydown({key:',',preventDefault(){}});assert.equal(window.captureTags.values().join(','),'Motion,SaaS');nodes['tag-pills'].children[0].children[1].onclick();assert.equal(window.captureTags.values().join(','),'SaaS');
+
+// Hyphen-omitted fuzzy search, ranking, selected exclusion, and Escape + Enter literal commit
+const fuzzyNodes={tags:new El(),'tag-pills':new El(),'tag-suggestions':new El()},fuzzyDoc={getElementById:id=>fuzzyNodes[id],createElement:()=>new El()},fuzzyWin={},fuzzyChrome={runtime:{sendMessage:async()=>({tags:['ecommerce-ui','e-commerce','case-study','micro-interactions']})}};
+vm.runInNewContext(fs.readFileSync(new URL('./extension/tags.js',import.meta.url),'utf8'),{document:fuzzyDoc,window:fuzzyWin,chrome:fuzzyChrome,Array});
+await Promise.resolve();
+fuzzyNodes.tags.value='ecommerce';
+fuzzyNodes.tags.listeners.input();
+const visible=()=>fuzzyNodes['tag-suggestions'].children.filter(o=>!o.hidden).map(o=>o.textContent);
+assert.deepEqual(visible(),['e-commerce','ecommerce-ui']);
+fuzzyNodes.tags.listeners.keydown({key:'Enter',preventDefault(){}});
+assert.deepEqual([...fuzzyWin.captureTags.values()],['e-commerce']);
+
+fuzzyNodes.tags.value='ecommerce';
+fuzzyNodes.tags.listeners.input();
+assert.deepEqual(visible(),['ecommerce-ui']);
+
+fuzzyNodes.tags.value='casestudy';
+fuzzyNodes.tags.listeners.input();
+assert.deepEqual(visible(),['case-study']);
+
+fuzzyNodes.tags.value='case study';
+fuzzyNodes.tags.listeners.input();
+assert.deepEqual(visible(),['case-study']);
+
+fuzzyNodes.tags.value='mcintr';
+fuzzyNodes.tags.listeners.input();
+assert.deepEqual(visible(),['micro-interactions']);
+
+// Pressing Escape closes suggestions; pressing Enter afterwards commits literal input instead of the hidden top match
+fuzzyNodes.tags.value='case';
+fuzzyNodes.tags.listeners.input();
+fuzzyNodes.tags.listeners.keydown({key:'Escape',preventDefault(){}});
+assert.equal(fuzzyNodes['tag-suggestions'].hidden,true);
+fuzzyNodes.tags.value='custom-tag';
+fuzzyNodes.tags.listeners.keydown({key:'Enter',preventDefault(){}});
+assert.deepEqual([...fuzzyWin.captureTags.values()],['e-commerce','custom-tag']);
+console.log('Tag pills, autocomplete, deduplication and removal passed.');

@@ -9,8 +9,11 @@ use std::{
     process::Command,
 };
 use tauri::Manager;
+mod bridge_setup;
 mod drive_backup;
+mod font_install;
 mod media_cache;
+mod runtime_tools;
 mod trash;
 mod video_editor;
 
@@ -31,33 +34,7 @@ fn library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(PathBuf::from(trimmed))
 }
 fn ffmpeg_program() -> PathBuf {
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let exe = dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
-            if exe.is_file() {
-                return exe;
-            }
-        }
-    }
-    #[cfg(target_os = "windows")]
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let packages = PathBuf::from(local).join("Microsoft").join("WinGet").join("Packages");
-        if let Ok(entries) = fs::read_dir(packages) {
-            for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().starts_with("Gyan.FFmpeg_") {
-                    if let Ok(builds) = fs::read_dir(entry.path()) {
-                        for build in builds.flatten() {
-                            let exe = build.path().join("bin").join("ffmpeg.exe");
-                            if exe.is_file() {
-                                return exe;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    PathBuf::from("ffmpeg")
+    runtime_tools::find_ffmpeg().unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }))
 }
 #[tauri::command]
 async fn fetch_favicon(app: tauri::AppHandle, source_id: String, source_url: String) -> Result<String, String> {
@@ -65,8 +42,9 @@ async fn fetch_favicon(app: tauri::AppHandle, source_id: String, source_url: Str
         uuid::Uuid::parse_str(&source_id).map_err(|_| "Invalid source ID")?;
         let url = url::Url::parse(&source_url).map_err(|_| "Invalid source URL")?;
         if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() { return Err("Unsupported URL".to_string()); }
+        let python = runtime_tools::ensure_python()?;
         let temp = std::env::temp_dir().join(format!("sightline-fav-{}.part", uuid::Uuid::new_v4()));
-        let mut cmd = Command::new("python");
+        let mut cmd = Command::new(python);
         #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
         let output = cmd.args(["-c", include_str!("../../scripts/fetch-favicon.py"), url.as_str()]).arg(&temp).output();
         let result = (|| {
@@ -94,7 +72,8 @@ fn catalog_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("discover-sites.json"))
 }
 fn cache_discover_images(path: &Path) -> Result<(), String> {
-    let mut cmd = Command::new("python");
+    let python = runtime_tools::ensure_python()?;
+    let mut cmd = Command::new(python);
     #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
     let output = cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").args(["-c", include_str!("../../scripts/cache-discover-images.py")]).arg(path).output().map_err(|e| e.to_string())?;
     if output.status.success() { Ok(()) } else { Err(format!("Could not cache Discover previews: {}", String::from_utf8_lossy(&output.stderr))) }
@@ -148,7 +127,8 @@ fn initialize_discover_catalog(app: tauri::AppHandle, data: String) -> Result<()
 }
 fn run_discover_refresh(path: &Path) -> Result<String, String> {
     if !path.exists() { return Err("Open Discover once before refreshing".into()); }
-    let mut cmd = Command::new("python");
+    let python = runtime_tools::ensure_python()?;
+    let mut cmd = Command::new(python);
     #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
     let output = cmd.env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").args(["-c", include_str!("../../scripts/refresh-discover.py")]).arg(path).env("SIGHTLINE_CSS_COLLECTOR", include_str!("../../scripts/discover-css-awards.py")).output()
         .map_err(|e| format!("Could not start Python: {e}"))?;
@@ -349,8 +329,11 @@ fn scan_instagram_at(dir: &Path, collections: &[InstagramCollection], save_confi
     if collections.is_empty() || collections.len()>2 { return Err("Choose at least one collection".into()); }
     fs::create_dir_all(dir).map_err(|e|e.to_string())?;
     let path=dir.join("instagram-sync-state.json");
-    let mut cmd=Command::new("python");
+    let python=runtime_tools::ensure_python()?;
+    let gdl=runtime_tools::ensure_gallery_dl()?;
+    let mut cmd=Command::new(python);
     #[cfg(target_os="windows")] cmd.creation_flags(0x08000000);
+    if let runtime_tools::GalleryDlTool::Binary(ref exe)=gdl{cmd.env("SIGHTLINE_GALLERY_DL",exe);}
     cmd.args(["-c",include_str!("../../scripts/sightline-instagram-sync.py"),"--state"]).arg(&path).args(["--browser","brave","--retries","0"]);
     for collection in collections {
         if ![("post-ideas","Post Ideas"),("web-design","Web design")].contains(&(collection.name.as_str(),collection.category.as_str())) {return Err("Invalid collection mapping".into());}
@@ -952,7 +935,8 @@ fn import_asset_impl(app: tauri::AppHandle, path: String, folder: Option<String>
     let dest = target_dir.join(&name);
     trash::check_not_symlink(&dest)?;
     if is_image || is_video {
-        let mut cmd = Command::new(ffmpeg_program());
+        let ffmpeg = runtime_tools::ensure_ffmpeg()?;
+        let mut cmd = Command::new(ffmpeg);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000);
         cmd.args(["-v", "error", "-y", "-i", &path]);
@@ -1037,11 +1021,19 @@ async fn download_post_media(app: tauri::AppHandle, source_url: String, use_brav
         let temp = std::env::temp_dir().join(format!("sightline-post-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp).map_err(|e|e.to_string())?;
         let result = (|| {
-            let mut cmd = Command::new("python");
+            let gdl = runtime_tools::ensure_gallery_dl()?;
+            let mut cmd = match gdl {
+                runtime_tools::GalleryDlTool::Binary(ref exe) => Command::new(exe),
+                runtime_tools::GalleryDlTool::PythonModule(ref py) => {
+                    let mut c = Command::new(py);
+                    c.args(["-m", "gallery_dl"]);
+                    c
+                }
+            };
             #[cfg(target_os = "windows")] cmd.creation_flags(0x08000000);
-            cmd.args(["-m", "gallery_dl", "--range", "1-20", "--destination"]).arg(&temp);
+            cmd.args(["--range", "1-20", "--destination"]).arg(&temp);
             if use_brave.unwrap_or(false) && host=="instagram.com" { cmd.args(["--cookies-from-browser", "brave/instagram.com"]); }
-            let output = cmd.arg("--").arg(url.as_str()).output().map_err(|_| "Install Python and gallery-dl to download post media.".to_string())?;
+            let output = cmd.arg("--").arg(url.as_str()).output().map_err(|e| format!("Could not run gallery-dl: {e}"))?;
             if !output.status.success() { return Err(if host=="instagram.com" {"Could not download Instagram media. Check your sign-in and gallery-dl setup; the link remains saved.".to_string()} else {format!("Could not download media: {}", String::from_utf8_lossy(&output.stderr).chars().take(400).collect::<String>())}); }
             fn collect(dir:&Path, out:&mut Vec<PathBuf>) -> Result<(),String> { for entry in fs::read_dir(dir).map_err(|e|e.to_string())? { let entry=entry.map_err(|e|e.to_string())?;let path=entry.path();if entry.file_type().map_err(|e|e.to_string())?.is_dir(){collect(&path,out)?}else if ["jpg","jpeg","png","webp","gif","mp4","webm","mov"].contains(&path.extension().and_then(|v|v.to_str()).unwrap_or("").to_lowercase().as_str()){out.push(path)} } Ok(()) }
             let mut paths=Vec::new();collect(&temp,&mut paths)?;paths.sort();if paths.is_empty(){return Err("No downloadable media found. The link is saved; you can import files manually.".to_string())}
@@ -1104,125 +1096,15 @@ fn open_url(url: String) -> Result<(), String> {
             .map_err(|e| e.to_string())
     }
 }
-#[cfg(target_os = "windows")]
-#[link(name = "gdi32")]
-extern "system" {
-    fn AddFontResourceExW(name: *const u16, flags: u32, reserved: *mut std::ffi::c_void) -> i32;
-}
-#[cfg(target_os = "windows")]
-#[link(name = "user32")]
-extern "system" {
-    fn SendNotifyMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
-}
 #[tauri::command]
 fn install_font(app: tauri::AppHandle, file: String, name: String) -> Result<String, String> {
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (app, file, name);
-        Err("Font installation is currently supported on Windows only".into())
+    let root = library_path(&app)?;
+    trash::check_library_dirs_safe(&root)?;
+    let (source, _) = safe_asset_path(&root, &file)?;
+    if !fs::symlink_metadata(&source).map(|m| !m.file_type().is_symlink() && m.is_file()).unwrap_or(false) {
+        return Err("Font file not found".into());
     }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let root = library_path(&app)?;
-        trash::check_library_dirs_safe(&root)?;
-        let (source, _) = safe_asset_path(&root, &file)?;
-        if !fs::symlink_metadata(&source)
-            .map(|m| !m.file_type().is_symlink() && m.is_file())
-            .unwrap_or(false)
-        {
-            return Err("Font file not found".into());
-        }
-        let file_name = source
-            .file_name()
-            .and_then(|v| v.to_str())
-            .ok_or("Invalid font file")?
-            .to_string();
-        let path = Path::new(&file_name);
-        let ext = path
-            .extension()
-            .and_then(|v| v.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext != "ttf" && ext != "otf" {
-            return Err("Windows installation requires a TTF or OTF file. This web font can still be previewed.".into());
-        }
-        let dir = PathBuf::from(
-            std::env::var_os("LOCALAPPDATA").ok_or("Local application data folder unavailable")?,
-        )
-        .join("Microsoft")
-        .join("Windows")
-        .join("Fonts");
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let dest = dir.join(&file_name);
-        if dest.exists() {
-            return Ok("This font is already installed for your Windows account.".into());
-        }
-        if let Ok(source_bytes) = fs::read(&source) {
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let existing = entry.path();
-                    if existing.extension().and_then(|v| v.to_str()).map(|v| v.eq_ignore_ascii_case(&ext)).unwrap_or(false)
-                        && fs::metadata(&existing).map(|m| m.len() == source_bytes.len() as u64).unwrap_or(false)
-                        && fs::read(&existing).map(|b| b == source_bytes).unwrap_or(false)
-                    {
-                        return Ok("This font is already installed for your Windows account.".into());
-                    }
-                }
-            }
-        }
-        fs::copy(&source, &dest).map_err(|e| e.to_string())?;
-        let registry_name = format!(
-            "{} [{}] (TrueType)",
-            name.chars().take(80).collect::<String>(),
-            path.file_stem().unwrap_or_default().to_string_lossy()
-        );
-        let mut reg = Command::new("reg.exe");
-        reg.creation_flags(0x08000000);
-        let status = reg
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts",
-                "/v",
-                &registry_name,
-                "/t",
-                "REG_SZ",
-                "/d",
-            ])
-            .arg(&dest)
-            .args(["/f"])
-            .status()
-            .map_err(|e| e.to_string());
-        if !matches!(status,Ok(v) if v.success()) {
-            let _ = fs::remove_file(&dest);
-            return Err("Could not register font for this Windows account".into());
-        }
-        let wide: Vec<u16> = dest
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let loaded = unsafe { AddFontResourceExW(wide.as_ptr(), 0, std::ptr::null_mut()) };
-        if loaded == 0 {
-            let mut remove = Command::new("reg.exe");
-            remove.creation_flags(0x08000000);
-            let _ = remove
-                .args([
-                    "delete",
-                    r"HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts",
-                    "/v",
-                    &registry_name,
-                    "/f",
-                ])
-                .status();
-            let _ = fs::remove_file(&dest);
-            return Err("Windows could not load this font file".into());
-        }
-        unsafe {
-            SendNotifyMessageW(0xffff, 0x001d, 0, 0);
-        }
-        Ok("Font installed for your Windows account.".into())
-    }
+    font_install::install(&source, &name)
 }
 #[derive(serde::Serialize)]
 struct PreviewInfo {
@@ -1259,7 +1141,9 @@ fn preview_impl(app: tauri::AppHandle, file: String) -> Result<PreviewInfo, Stri
     trash::safe_single_name(&name)?;
     let output = dir.join(&name);
     trash::check_not_symlink(&output)?;
-    let ffmpeg = ffmpeg_program();
+    let Ok(ffmpeg) = runtime_tools::ensure_ffmpeg() else {
+        return Ok(PreviewInfo { thumbnail: None, palette: vec![] });
+    };
     let mut thumb = Command::new(&ffmpeg);
     #[cfg(target_os = "windows")]
     thumb.creation_flags(0x08000000);
@@ -1409,7 +1293,8 @@ async fn set_video_thumbnail(app: tauri::AppHandle, file: String, time: f64, pre
         trash::safe_single_name(&name)?;
         let output = dir.join(&name);
         trash::check_not_symlink(&output)?;
-        let mut cmd = Command::new(ffmpeg_program());
+        let ffmpeg = runtime_tools::ensure_ffmpeg()?;
+        let mut cmd = Command::new(ffmpeg);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000);
         let ok = cmd
@@ -1553,7 +1438,11 @@ async fn copy_image_to_clipboard(
     file: Option<String>,
     png_bytes: Option<Vec<u8>>,
     trashed: Option<bool>,
+    time: Option<f64>,
 ) -> Result<(), String> {
+    if time.is_some_and(|t| !t.is_finite() || t < 0.0) {
+        return Err("Invalid frame time".into());
+    }
     #[cfg(target_os = "windows")]
     {
         let resolved_asset = match file {
@@ -1578,13 +1467,17 @@ async fn copy_image_to_clipboard(
                     .and_then(|e| e.to_str())
                     .map(|e| e.to_ascii_lowercase())
                     .unwrap_or_default();
-                if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "bmp" | "gif") {
+                if time.is_none() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "bmp" | "gif") {
                     asset
                 } else {
-                    let mut ff = Command::new(ffmpeg_program());
+                    let ffmpeg = runtime_tools::ensure_ffmpeg()?;
+                    let mut ff = Command::new(ffmpeg);
                     ff.creation_flags(0x08000000);
+                    ff.args(["-v", "error", "-y"]);
+                    if let Some(time) = time {
+                        ff.arg("-ss").arg(format!("{time:.6}"));
+                    }
                     let out = ff
-                        .arg("-y")
                         .arg("-i")
                         .arg(&asset)
                         .args(["-frames:v", "1"])
@@ -1631,9 +1524,37 @@ async fn copy_image_to_clipboard(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, file, png_bytes, trashed);
+        let _ = (app, file, png_bytes, trashed, time);
         Err("Native image clipboard fallback is only configured for Windows".into())
     }
+}
+#[tauri::command]
+async fn copy_video_frame_to_clipboard(app: tauri::AppHandle, file: String, trashed: Option<bool>, time: f64) -> Result<(), String> {
+    if !time.is_finite() || time < 0.0 { return Err("Invalid frame time".into()); }
+    #[cfg(target_os = "windows")]
+    {
+        let root = library_path(&app)?;
+        let asset = trash::resolve_asset_disk_path(&root, &file, trashed)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let ffmpeg = runtime_tools::ensure_ffmpeg()?;
+            let mut ff = Command::new(ffmpeg);
+            ff.creation_flags(0x08000000);
+            let output = ff.args(["-v", "error", "-ss"]).arg(format!("{time:.6}"))
+                .arg("-i").arg(asset).args(["-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"])
+                .output().map_err(|e| format!("Could not capture video frame: {e}"))?;
+            if !output.status.success() || output.stdout.is_empty() {
+                return Err("Could not capture video frame".into());
+            }
+            let image = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+                .map_err(|e| format!("Could not decode video frame: {e}"))?.into_rgba8();
+            let (width, height) = image.dimensions();
+            let data = arboard::ImageData { width: width as usize, height: height as usize, bytes: image.into_raw().into() };
+            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_image(data))
+                .map_err(|e| format!("Could not access clipboard: {e}"))
+        }).await.map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = (app, file, trashed); Err("Native frame copying is only available on Windows".into()) }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Capture {
@@ -2348,7 +2269,7 @@ fn main() {
             if now.saturating_sub(last) >= 86400 {
                 let result = run_discover_refresh(&dir.join("discover-sites.json"));
                 if let Ok(ref output) = result {
-                    if serde_json::from_str::<serde_json::Value>(output).map(|v| !v["possibleGap"].as_bool().unwrap_or(true) && !v["lapaFeedError"].as_bool().unwrap_or(true) && v["bookmarkErrors"].as_u64().unwrap_or(1)==0 && v["indexErrors"].as_u64().unwrap_or(1)==0 && v["cssErrors"].as_u64().unwrap_or(1)==0).unwrap_or(false) {
+                    if serde_json::from_str::<serde_json::Value>(output).map(|v| !v["possibleGap"].as_bool().unwrap_or(true) && !v["lapaFeedError"].as_bool().unwrap_or(true) && v["bookmarkErrors"].as_u64().unwrap_or(1)==0 && v["indexErrors"].as_u64().unwrap_or(1)==0 && v["pixlpinErrors"].as_u64().unwrap_or(1)==0 && v["cssErrors"].as_u64().unwrap_or(1)==0).unwrap_or(false) {
                         let _ = fs::write(&stamp, now.to_string());
                     }
                 }
@@ -2373,7 +2294,24 @@ fn main() {
         return;
     }
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let _ = bridge_setup::sync_bundled_extension(&handle);
+                let _ = bridge_setup::refresh_existing_bridge_manifest();
+            });
+            Ok(())
+        })
         .register_asynchronous_uri_scheme_protocol(media_cache::THUMB_SCHEME, |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
@@ -2417,6 +2355,7 @@ fn main() {
             reveal_asset_file,
             get_asset_path,
             copy_image_to_clipboard,
+            copy_video_frame_to_clipboard,
             pending_captures,
             capture_open_requests,
             take_capture_open_request,
@@ -2427,7 +2366,12 @@ fn main() {
             warm_discover_thumbs,
             reset_video_thumbnail,
             video_editor::probe_video_asset,
-            video_editor::export_edited_video
+            video_editor::export_edited_video,
+            runtime_tools::runtime_tools_status,
+            runtime_tools::ensure_runtime_tools,
+            bridge_setup::get_extension_setup_status,
+            bridge_setup::open_extension_folder,
+            bridge_setup::connect_browser_extension
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Sightline");

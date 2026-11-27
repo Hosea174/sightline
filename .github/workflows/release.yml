@@ -1,0 +1,64 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish-release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build installer and publish GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun run tauri
+          tagName: v__VERSION__
+          releaseName: Sightline v__VERSION__
+          releaseBody: |
+            ## Sightline v__VERSION__
+
+            ### Install on Windows
+            1. Download **`Sightline___VERSION___x64-setup.exe`** below and run it.
+            2. If Windows SmartScreen appears, click **More info** -> **Run anyway** (expected for unsigned side-project builds).
+            3. Inside Sightline, click the puzzle icon (**Browser extension & tools**) in the top bar to load the bundled browser extension once and connect the native capture bridge.
+          releaseDraft: false
+          prerelease: false
+
+      - name: Upload bundled browser extension archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $tag = "v$version"
+          Compress-Archive -Path src-tauri/resources/extension/* -DestinationPath Sightline-Extension.zip -Force
+          gh release upload $tag Sightline-Extension.zip --clobber

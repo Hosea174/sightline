@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, SlidersHorizontal } from 'lucide-react';
+import { filterTagSuggestions } from '../logic';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import {
@@ -31,8 +32,7 @@ const SEARCH_THRESHOLD = 12;
 function FilterOptions({ group }: { group: FilterGroup }) {
   const [query, setQuery] = useState('');
   const { label, options, selected, onChange, getSwatch } = group;
-  const needle = query.trim().toLowerCase();
-  const shown = needle ? options.filter((option) => option.toLowerCase().includes(needle)) : options;
+  const shown = query.trim() ? filterTagSuggestions(options, query) : options;
   return (
     <>
       {options.length > SEARCH_THRESHOLD && (

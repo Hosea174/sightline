@@ -12,7 +12,7 @@ export function ChoiceMenu({ id, label, value, options, onChange }: {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button id={id} type="button" variant="outline" className="choice-menu" aria-label={label}>
+        <Button id={id} type="button" variant="outline" className="choice-menu shadow-[var(--field-shadow)]" aria-label={label}>
           <span>{options.find(option => option.value === value)?.label || label}</span><ChevronDown size={14}/>
         </Button>
       </DropdownMenuTrigger>

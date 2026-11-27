@@ -68,7 +68,8 @@ def scan(url, retries, timeout, browser=None, known=None):
     last = "gallery-dl did not complete"
     for attempt in range(retries + 1):
         try:
-            command = [sys.executable, "-m", "gallery_dl"]
+            gallery_dl_bin = os.environ.get("SIGHTLINE_GALLERY_DL", "").strip()
+            command = [gallery_dl_bin] if gallery_dl_bin else [sys.executable, "-m", "gallery_dl"]
             if browser: command += ["--cookies-from-browser", browser + "/instagram.com"]
             def run(recent):
                 args = command + (["--post-range", "1-50"] if recent else []) + ["--dump-json", url]
