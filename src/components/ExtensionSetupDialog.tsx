@@ -147,7 +147,7 @@ export function ExtensionSetupDialog({
             </Button>
           </div>
           <p className="setup-help">
-            Open <code>chrome://extensions</code> or <code>brave://extensions</code>, enable{' '}
+            Open <code>chrome://extensions</code>, enable{' '}
             <strong>Developer mode</strong>, click <strong>Load unpacked</strong>, and select the
             extension folder. Future Sightline updates refresh this folder automatically.
           </p>
